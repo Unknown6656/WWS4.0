@@ -1,0 +1,24 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>WWS</RootNamespace>
+    <AssemblyName>wwslib40</AssemblyName>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <OutputPath>../bin</OutputPath>
+    <DocumentationFile>../bin/wwslib40.xml</DocumentationFile>
+    <LangVersion>latest</LangVersion>
+    <DebugType>full</DebugType>
+    <DebugSymbols>true</DebugSymbols>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <COMReference Include="NetFwTypeLib.dll">
+      <Guid>58fbcf7c-e7a9-467c-80b3-fc65e8fcca08</Guid>
+      <VersionMajor>1</VersionMajor>
+      <VersionMinor>0</VersionMinor>
+      <Lcid>0</Lcid>
+      <WrapperTool>tlbimp</WrapperTool>
+      <Isolated>false</Isolated>
+    </COMReference>
+  </ItemGroup>
+</Project>
