@@ -1,27 +1,37 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using System.Security.Cryptography.X509Certificates;
 using System.Collections.ObjectModel;
+using System.Collections.Generic;
+using System.Security;
 using System.Linq;
-using System.Net;
-using System.Runtime.CompilerServices;
-using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Web;
+using System.Net;
+using System.IO;
+using System;
 
 using WWS.Internals;
 
 
 namespace WWS
 {
+    /// <summary>
+    /// Represents a delegate for the processing of incoming WWS4.0 (HTTP/HTTPS) requests.
+    /// </summary>
+    /// <param name="data">The WWS4.0 request data</param>
+    /// <returns>The WWS4.0 response data</returns>
     public delegate WWSResponse WWSRequestHandler(WWSRequest data);
 
-
+    /// <summary>
+    /// Represents a WonkyWebServer™
+    /// </summary>
     public sealed class WonkyWebServer
     {
         private WWSConfiguration _config;
         private HTTPServer _server;
 
-
+        /// <summary>
+        /// The server's configuration
+        /// </summary>
         public WWSConfiguration Configuration
         {
             set
@@ -34,15 +44,34 @@ namespace WWS
             }
             get => _config;
         }
-
+        /// <summary>
+        /// Inidicates, whether the server is running
+        /// </summary>
         public bool IsRunning { private set; get; }
 
-
+        /// <summary>
+        /// The event is fired upon each incoming HTTP or HTTPS request.
+        /// </summary>
         public event WWSRequestHandler OnIncomingRequest;
 
 
+        /// <summary>
+        /// Creates a new WonkyWebServer™ instance with the default HTTP configuration
+        /// </summary>
+        public WonkyWebServer()
+            : this (WWSConfiguration.DefaultHTTPConfiguration)
+        {       
+        }
+
+        /// <summary>
+        /// Creates a new WonkyWebServer™ instance using the given configuration
+        /// </summary>
+        /// <param name="config">Server configuration</param>
         public WonkyWebServer(WWSConfiguration config) => Configuration = config;
 
+        /// <summary>
+        /// Starts the server
+        /// </summary>
         public void Start()
         {
             lock (this)
@@ -62,6 +91,9 @@ namespace WWS
             }
         }
 
+        /// <summary>
+        /// Stops the server
+        /// </summary>
         public void Stop()
         {
             lock (this)
@@ -73,6 +105,10 @@ namespace WWS
             }
         }
 
+        /// <summary>
+        /// Returns whether the server currently has a valid configuration
+        /// </summary>
+        /// <returns>Configuration verification result</returns>
         public bool HasValidConfiguration()
         {
             try
@@ -92,14 +128,26 @@ namespace WWS
             // TODO
         }
 
+        private static byte[] GetRequestPostData(HttpListenerRequest request)
+        {
+            if (request.HasEntityBody)
+                using (Stream s = request.InputStream)
+                using (MemoryStream ms = new MemoryStream())
+                {
+                    s.CopyTo(ms);
+
+                    return ms.ToArray();
+                }
+
+            return new byte[0];
+        }
+
         private WWSResponse OnIncoming(HttpListenerRequest req, byte[] content, HttpListenerResponse res)
         {
             if (req is null || res is null || content is null)
                 return null;
 
             DateTime utcnow = DateTime.UtcNow;
-            string path = req.Url.LocalPath;
-
             var timestamp = new
             {
                 UTCRaw = utcnow,
@@ -109,7 +157,7 @@ namespace WWS
             res.Headers[HttpResponseHeader.Server] = Configuration.ServerString;
             res.Headers[HttpResponseHeader.CacheControl] = "max-cache=" + Configuration.CachingAge;
             res.Headers[HttpResponseHeader.Date] = $"{utcnow:ddd, dd MMM yyyy HH:mm:ss} UTC";
-            res.Headers[HttpResponseHeader.Allow] = "GET, HEAD, POST";
+            res.Headers[HttpResponseHeader.Allow] = "GET, HEAD, POST, PUT";
 
             if (Configuration.UseConnectionUpgrade)
             {
@@ -153,11 +201,19 @@ namespace WWS
             if (OnIncomingRequest != null)
                 try
                 {
-                    rdat = OnIncomingRequest(new WWSRequest
+                    WWSRequest wwsrq = new WWSRequest
                     {
+                        RawRequest = req,
                         Cookies = cookies,
+                        Content = content,
                         ServerVariables = new ReadOnlyDictionary<string, string>(servervars),
-                    });
+                        GETVariables = new ReadOnlyDictionary<string, string>(Util.DecomposeQueryString(req.Url.Query)),
+                    };
+
+                    if (req.ContentType?.ToLower() == "application/x-www-form-urlencoded" && req.HttpMethod?.ToLower() == "post")
+                        wwsrq.POSTVariables = new ReadOnlyDictionary<string, string>(Util.DecomposeQueryString(wwsrq.ContentString));
+
+                    rdat = OnIncomingRequest(wwsrq);
                 }
                 catch (Exception ex)
                 {
@@ -218,7 +274,55 @@ namespace WWS
         /// The client's cookies (read/write)
         /// </summary>
         public Dictionary<string, (string Value, DateTime Expiration)> Cookies { internal set; get; }
-
+        /// <summary>
+        /// The HTTP/HTTPS reuqest's GET variables (read-only)
+        /// </summary>
+        public IReadOnlyDictionary<string, string> GETVariables { internal set; get; }
+        /// <summary>
+        /// The HTTP/HTTPS reuqest's POST variables (read-only)
+        /// </summary>
+        public IReadOnlyDictionary<string, string> POSTVariables { internal set; get; }
+        /// <summary>
+        /// The binary content sent with the HTTP/HTTPS request. This can e.g. be POST data.
+        /// </summary>
+        public byte[] Content { internal set; get; }
+        /// <summary>
+        /// The length of the binary content sent with the HTTP/HTTPS request in bytes.
+        /// </summary>
+        public int ContentLength => Content.Length;
+        /// <summary>
+        /// The decoded (string) content sent with the HTTP/HTTPS request.
+        /// </summary>
+        public string ContentString => RawRequest.ContentEncoding.GetString(Content);
+        /// <summary>
+        /// The requested HTTP/HTTPS URL.
+        /// </summary>
+        public Uri RequestedURL => RawRequest.Url;
+        /// <summary>
+        /// The requested HTTP/HTTPS URL path. In case of the requested URI 'https://example.org/my/file?param=value' the path would be '/my/file'.
+        /// </summary>
+        public string RequestedURLPath => RequestedURL.AbsolutePath;
+        /// <summary>
+        /// The HTTP/HTTP request method, e.g. GET, HEAD, POST, PUT, etc.
+        /// </summary>
+        public string HTTPRequestMethod => RawRequest.HttpMethod;
+        /// <summary>
+        /// The underlying (raw) HTTP/HTTPS request
+        /// </summary>
+        public HttpListenerRequest RawRequest { internal set; get; }
+        /// <summary>
+        /// The sender's public IP information
+        /// </summary>
+        public IPEndPoint Sender => RawRequest.RemoteEndPoint;
+        /// <summary>
+        /// A unique ID of the HTTP/HTTPS request
+        /// </summary>
+        // ReSharper disable once NestedStringInterpolation
+        public string RequestID => $"{{{$"{RawRequest.RequestTraceIdentifier:D}"}}}/{Sender}";
+        /// <summary>
+        /// The sender's browser user agent
+        /// </summary>
+        public string UserAgent => RawRequest.UserAgent;
 
         internal WWSRequest()
         {
@@ -247,13 +351,16 @@ namespace WWS
         /// The response's textual representation
         /// </summary>
         public string Text => Codepage.GetString(Bytes);
-
+        /// <summary>
+        /// The HTTP/HTTPS status return code
+        /// </summary>
         public HttpStatusCode StatusCode { get; }
 
 
         /// <summary>
         /// Creates a new HTTP/HTTPS response from the given UTF-16 string (converted to UTF-8)
         /// </summary>
+        /// <param name="code">The HTTP/HTTPS status code</param>
         /// <param name="text">UTF-16 string</param>
         public WWSResponse(HttpStatusCode code, string text)
             : this(code, Codepage.GetBytes(text ?? ""))
@@ -263,6 +370,7 @@ namespace WWS
         /// <summary>
         /// Creates a new HTTP/HTTPS response from the given byte array
         /// </summary>
+        /// <param name="code">The HTTP/HTTPS status code</param>
         /// <param name="bytes">Byte array</param>
         public WWSResponse(HttpStatusCode code, byte[] bytes)
         {
@@ -292,16 +400,35 @@ namespace WWS
         public static explicit operator WWSResponse(string text) => (HttpStatusCode.OK, text);
     }
 
+    /// <summary>
+    /// Represents a server configuration
+    /// </summary>
     public struct WWSConfiguration
     {
+        /// <summary>
+        /// The optional HTTPS configuration (a value of 'null' represents a HTTP server)
+        /// </summary>
         public WWSHTTPSConfiguration? HTTPS { set; get; }
+
         public bool UseConnectionUpgrade { set; get; }
+        
         public ushort CachingAge { set; get; }
+        /// <summary>
+        /// The server's string (i.e. its name)
+        /// </summary>
         public string ServerString { set; get; }
+        /// <summary>
+        /// The listening path (default is empty)
+        /// </summary>
         public string ListeningPath { set; get; }
+        /// <summary>
+        /// The TCP/UDP port, on which the server is listening
+        /// </summary>
         public ushort ListeningPort { set; get; }
-
-
+        
+        /// <summary>
+        /// The default HTTP configuration
+        /// </summary>
         public static WWSConfiguration DefaultHTTPConfiguration { get; } = new WWSConfiguration
         {
             ListeningPath = "",
@@ -309,6 +436,9 @@ namespace WWS
             ServerString = "WonkyWebStack™ (WWS4.0) Server",
             HTTPS = null
         };
+        /// <summary>
+        /// The default HTTPS configuration
+        /// </summary>
         public static WWSConfiguration DefaultHTTPSConfiguration { get; } = new WWSConfiguration
         {
             ListeningPath = "",
@@ -318,16 +448,38 @@ namespace WWS
         };
     }
 
+    /// <summary>
+    /// Represents an HTTPS configuration
+    /// </summary>
     public struct WWSHTTPSConfiguration
     {
         public WWSHTTPSCertificatePolicy CertificatePolicy { set; get; }
+        /// <summary>
+        /// The .X509 encryption and signature certificate
+        /// </summary>
         public X509Certificate Certificate { set; get; }
-        public string CertificatePath
+        /// <summary>
+        /// The file path pointing to an .X509 encryption and signature certificate (usually with the file extension .cer)
+        /// </summary>
+        public string X509_CertificatePath
         {
             set => Certificate = value != null ? X509Certificate.CreateFromCertFile(value) : throw new ArgumentNullException(nameof(value));
         }
+        /// <summary>
+        /// The file path and password (can also be empty) pointing to an PKCS#12  encryption and signature certificate (usually with the file extension .pfx or .p12)
+        /// </summary>
+        public (string Path, SecureString Password) PKCS12_Certificate
+        {
+            set
+            {
+                if (value.Path is string path)
+                    Certificate = new X509Certificate2(path, value.Password ?? new SecureString());
+            }
+        }
 
-
+        /// <summary>
+        /// The default HTTPS configuration
+        /// </summary>
         public static WWSHTTPSConfiguration DefaultConfiguration { get; } = new WWSHTTPSConfiguration
         {
             CertificatePolicy = WWSHTTPSCertificatePolicy.KeepCertificate,

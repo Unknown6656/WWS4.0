@@ -1,13 +1,8 @@
 ﻿using System.Security.Cryptography.X509Certificates;
 using System.Runtime.InteropServices;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.Reflection;
 using System.Linq;
-using System.Text;
 using System.IO;
-using System;
-using System.Dynamic;
 
 using WWS.Internals;
 
@@ -28,10 +23,11 @@ namespace WWS.Internals
 
 
         /// <summary>
-        /// 
+        /// Checks whether the given .X509 certificate store contains the given .X509 certificate and returns the check result
         /// </summary>
         /// <param name="store">The .X509 store</param>
         /// <param name="path">Path to the certificate's .cer-file</param>
+        /// <returns>Check result ('true' -> the certificate store contains the given .X509 certificate)</returns>
         public static bool ContainsCertificate(StoreName store, string path)
         {
             using (X509Certificate cert = X509Certificate.CreateFromCertFile(path))
@@ -67,12 +63,22 @@ namespace WWS.Internals
             }
         }
 
+        /// <summary>
+        /// Uninstalls the given certificate from the given .X509-store
+        /// </summary>
+        /// <param name="store">The .X509 store</param>
+        /// <param name="path">Path to the certificate's .cer-file</param>
         public static void UninstallCertificate(StoreName store, string path)
         {
             using (X509Certificate cert = X509Certificate.CreateFromCertFile(path))
                 UninstallCertificate(store, cert);
         }
 
+        /// <summary>
+        /// Uninstalls the given certificate from the given .X509-store
+        /// </summary>
+        /// <param name="store">The .X509 store</param>
+        /// <param name="cert">The .X509 certificate</param>
         public static void UninstallCertificate(StoreName store, X509Certificate cert)
         {
             using (X509Store s = new X509Store(store, StoreLocation.LocalMachine))

@@ -1,9 +1,9 @@
-﻿using System.Collections.Generic;
+﻿using System.Security.Cryptography.X509Certificates;
+using System.Collections.Generic;
 using System.IO;
 using System;
 
 using NetFwTypeLib;
-using System.Security.Cryptography.X509Certificates;
 
 namespace WWS.Internals
 {
@@ -25,6 +25,36 @@ namespace WWS.Internals
             s.Read(arr, 0, arr.Length);
 
             return arr;
+        }
+
+        internal static Dictionary<string, string> DecomposeQueryString(string query)
+        {
+            Dictionary<string, string> dic = new Dictionary<string, string>();
+
+            if (query is string s)
+            {
+                if (s.StartsWith("?"))
+                    s = s.Length > 1 ? s.Substring(1) : "";
+
+                while (s.Contains("&"))
+                {
+                    int idx_amp = s.IndexOf('&');
+                    string subq = s.Remove(idx_amp);
+                    int idx_eq = subq.IndexOf('=');
+
+                    if (idx_eq >= 0)
+                        dic[Uri.UnescapeDataString(subq.Remove(idx_eq))] = Uri.UnescapeDataString(subq.Substring(idx_eq + 1));
+                    else if (subq.Length > 0)
+                        dic[Uri.UnescapeDataString(subq)] = "";
+
+                    s = s.Substring(idx_amp + 1);
+                }
+
+                if (s.Length > 0)
+                    dic[Uri.UnescapeDataString(s)] = "";
+            }
+
+            return dic;
         }
     }
 

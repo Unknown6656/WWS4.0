@@ -1,6 +1,6 @@
 ﻿using System.Threading;
-using System;
 using System.Net;
+using System;
 
 using WWS;
 
@@ -11,30 +11,31 @@ namespace Test
     {
         public static void Main(string[] args)
         {
-            WonkyWebServer srv = new WonkyWebServer(new WWSConfiguration
-            {
-                ListeningPort = 1488,
-                HTTPS =  null,
-                ListeningPath = "",
-                ServerString = "lelwank",
-                CachingAge = 0,
-                UseConnectionUpgrade = false
-            });
+            WWSConfiguration config = WWSConfiguration.DefaultHTTPSConfiguration;
 
-            Console.WriteLine($"Listening on {srv.Configuration.ListeningPort}");
+            config.HTTPS = new WWSHTTPSConfiguration
+            {
+                PKCS12_Certificate = ("server.pfx", "s040-nb16".ToSecureString())
+            };
+
+            WonkyWebServer srv = new WonkyWebServer(config);
+            
 
             srv.OnIncomingRequest += r => (HttpStatusCode.OK, $@"
 <html>
     <head>
         <title>TITLE</title>
     </head>
-    <body>
-        <h1>TITLE</h1>
-        text
+    <body style=""font-family: monospace"">
+        <h1>HELLO {r.Sender}!</h1>
+        You requested <b>'{r.RequestedURL}'</b>.
         <br/>
-        {0 / (IntPtr.Size - IntPtr.Size)}
+        Your user agent: <b>'{r.UserAgent}'</b>
     </body>
 </html>");
+
+            Console.WriteLine($"Listening on {srv.Configuration.ListeningPort}. Press ESC to exit.");
+
             srv.Start();
 
             do

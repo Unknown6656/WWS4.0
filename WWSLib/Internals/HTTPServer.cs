@@ -1,24 +1,18 @@
-﻿using System.Text.RegularExpressions;
-using System.Collections.Generic;
-using System.Threading.Tasks;
+﻿using System.Threading.Tasks;
 using System.Threading;
-using System.Net.Mime;
-using System.Linq;
-using System.Text;
 using System.Net;
-using System.IO;
 using System;
 
 
 namespace WWS.Internals
 {
     /// <summary>
-    /// 
+    /// Represents a delegate for the processing of incoming HTTP/HTTPS requests.
     /// </summary>
-    /// <param name="req"></param>
-    /// <param name="content"></param>
-    /// <param name="res"></param>
-    /// <returns></returns>
+    /// <param name="req">The HTTP/HTTPS request data</param>
+    /// <param name="content">The HTTP/HTTPS request content</param>
+    /// <param name="res">The HTTP/HTTPS response data</param>
+    /// <returns>The WWS response data</returns>
     public delegate WWSResponse RequestHandler(HttpListenerRequest req, byte[] content, HttpListenerResponse res);
 
 
@@ -38,7 +32,7 @@ namespace WWS.Internals
         /// <summary>
         /// Indicates, whether the current instance has already been disposed
         /// </summary>
-        public bool IsDisposed { get; private set; } = false;
+        public bool IsDisposed { get; private set; }
         /// <summary>
         /// The request processing handler
         /// </summary>
@@ -148,7 +142,6 @@ namespace WWS.Internals
         
             try
             {
-                string sender = $"{{{$"{ctx.Request.RequestTraceIdentifier:D}"}}}/{ctx.Request.RemoteEndPoint}";
                 byte[] content = ctx.Request.InputStream.ToBytes();
                 WWSResponse resp = Handler(ctx.Request, content, ctx.Response);
                 
