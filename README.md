@@ -1,4 +1,4 @@
-# Wonky Webstack 4.0™
+# Wonky Webstack 4.0â„¢
 
 A library for a simple HTTP and HTTPS webserver.
 
@@ -50,15 +50,15 @@ or:
 ```csharp
 var srv = new WonkyWebServer(new WWSConfiguration
 {
-    HTTPS = new WWSHTTPSConfiguration			// use HTTPS
+    HTTPS = new WWSHTTPSConfiguration        // use HTTPS
     {
-        X509_CertificatePath = "server.cer",	// certificate path
+        X509_CertificatePath = "server.cer", // certificate path
     },
-    ListeningPort = 2000,						// Listen on port 2000
-    CachingAge = 60,							// This website should be cached for a maximum of 60sec
-    ListeningPath = "virtual_server1/",			// Only listen on requests beginning with
-												//  https://hostname:2000/virtual_server1/
-    ServerString = "my custom server"			// The server string
+    ListeningPort = 2000,                    // Listen on port 2000
+    CachingAge = 60,                         // This website should be cached for a maximum of 60sec
+    ListeningPath = "virtual_server1/",      // Only listen on requests beginning with
+                                             //  https://hostname:2000/virtual_server1/
+    ServerString = "my custom server"        // The server string
 });
 
 ...
