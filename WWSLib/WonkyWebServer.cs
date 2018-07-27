@@ -22,7 +22,7 @@ namespace WWS
     public delegate WWSResponse WWSRequestHandler(WWSRequest data);
 
     /// <summary>
-    /// Represents a WonkyWebServer™
+    /// Represents a WonkyWebServer™ for event-based HTTP/HTTPS request processing.
     /// </summary>
     public sealed class WonkyWebServer
     {
@@ -148,18 +148,26 @@ namespace WWS
                 return null;
 
             DateTime utcnow = DateTime.UtcNow;
+            WWSRequestHandler handler;
+            WWSConfiguration config;
             var timestamp = new
             {
                 UTCRaw = utcnow,
                 UTCSinceUnix = new DateTimeOffset(utcnow).ToUnixTimeMilliseconds(),
             };
 
-            res.Headers[HttpResponseHeader.Server] = Configuration.ServerString;
-            res.Headers[HttpResponseHeader.CacheControl] = "max-cache=" + Configuration.CachingAge;
+            lock (this)
+            {
+                config = Configuration;
+                handler = OnIncomingRequest;
+            }
+
+            res.Headers[HttpResponseHeader.Server] = config.ServerString;
+            res.Headers[HttpResponseHeader.CacheControl] = "max-cache=" + config.CachingAge;
             res.Headers[HttpResponseHeader.Date] = $"{utcnow:ddd, dd MMM yyyy HH:mm:ss} UTC";
             res.Headers[HttpResponseHeader.Allow] = "GET, HEAD, POST, PUT";
 
-            if (Configuration.UseConnectionUpgrade)
+            if (config.UseConnectionUpgrade)
             {
                 res.Headers[HttpResponseHeader.Connection] = "Upgrade";
                 res.Headers[HttpResponseHeader.Upgrade] = "h2c";
@@ -198,7 +206,7 @@ namespace WWS
             
             WWSResponse rdat = (HttpStatusCode.ServiceUnavailable, "<h1>service unavailable</h1>");
 
-            if (OnIncomingRequest != null)
+            if (handler != null)
                 try
                 {
                     WWSRequest wwsrq = new WWSRequest
@@ -213,7 +221,7 @@ namespace WWS
                     if (req.ContentType?.ToLower() == "application/x-www-form-urlencoded" && req.HttpMethod?.ToLower() == "post")
                         wwsrq.POSTVariables = new ReadOnlyDictionary<string, string>(Util.DecomposeQueryString(wwsrq.ContentString));
 
-                    rdat = OnIncomingRequest(wwsrq);
+                    rdat = handler(wwsrq);
                 }
                 catch (Exception ex)
                 {

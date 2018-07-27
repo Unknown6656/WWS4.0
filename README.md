@@ -2,7 +2,13 @@
 
 A library for a simple HTTP and HTTPS webserver.
 
+<img height="150" src="wonky-certificate.jpg"/>
+
 The usage of this libary is fairly simple:
+
+# WonkyWebServer™
+A webserver which processes requests upon event firing.
+
 ```csharp
 using WWS;
 
@@ -36,7 +42,6 @@ public static void Main(string[] args)
 }
 ```
 
-
 The webserver can be configured as follows:
 ```csharp
 var srv = new WonkyWebServer();
@@ -63,3 +68,7 @@ var srv = new WonkyWebServer(new WWSConfiguration
 
 ...
 ```
+
+# DodgyWebServer™
+A file-based webserver with scripting capabilities (like a PHP server).
+
