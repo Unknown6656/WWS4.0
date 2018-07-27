@@ -1,8 +1,7 @@
-# Wonky Webstack 4.0â„¢
+# Wonky Webstack 4.0™
 
 A library for a simple HTTP and HTTPS webserver.
-
-<img height="150" src="wonky-certificate.jpg"/>
+<img height="256" src="wonky-certificate.jpg"/>
 
 The usage of this libary is fairly simple:
 
@@ -72,3 +71,5 @@ var srv = new WonkyWebServer(new WWSConfiguration
 # DodgyWebServer™
 A file-based webserver with scripting capabilities (like a PHP server).
 
+
+// TODO
