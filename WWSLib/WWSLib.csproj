@@ -10,6 +10,8 @@
     <DebugType>full</DebugType>
     <DebugSymbols>true</DebugSymbols>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects> 
+    <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType> 
   </PropertyGroup>
   <ItemGroup>
     <COMReference Include="NetFwTypeLib.dll">
@@ -20,5 +22,8 @@
       <WrapperTool>tlbimp</WrapperTool>
       <Isolated>false</Isolated>
     </COMReference>
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="2.8.2" />
   </ItemGroup>
 </Project>

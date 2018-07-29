@@ -12,6 +12,19 @@ namespace WWS.Internals
         internal static string Sys32Path { get; } = Environment.ExpandEnvironmentVariables("%systemroot%/system32");
 
 
+        internal static string BytesToString(this long sz)
+        {
+            string[] suf = { "B", "KB", "MB", "GB", "TB", "PB", "EB" };
+
+            if (sz == 0)
+                return "0" + suf[0];
+
+            long bytes = Math.Abs(sz);
+            int place = Convert.ToInt32(Math.Floor(Math.Log(bytes, 1024)));
+
+            return Math.Sign(sz) * Math.Round(bytes / Math.Pow(1024, place), 1) + suf[place];
+        }
+
         internal static string GetHash(this X509Certificate cert) => cert is null ? "" : cert.GetCertHashString();
 
         internal static byte[] ToBytes(this Stream s)
@@ -35,6 +48,8 @@ namespace WWS.Internals
             {
                 if (s.StartsWith("?"))
                     s = s.Length > 1 ? s.Substring(1) : "";
+                
+                s += '&';
 
                 while (s.Contains("&"))
                 {

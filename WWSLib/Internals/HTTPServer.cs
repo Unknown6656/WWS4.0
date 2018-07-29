@@ -13,8 +13,7 @@ namespace WWS.Internals
     /// <param name="content">The HTTP/HTTPS request content</param>
     /// <param name="res">The HTTP/HTTPS response data</param>
     /// <returns>The WWS response data</returns>
-    public delegate WWSResponse RequestHandler(HttpListenerRequest req, byte[] content, HttpListenerResponse res);
-
+    public delegate Task<WWSResponse> RequestHandler(HttpListenerRequest req, byte[] content, HttpListenerResponse res);
 
     /// <summary>
     /// Represents a simple HTTP/HTTPS server
@@ -37,6 +36,11 @@ namespace WWS.Internals
         /// The request processing handler
         /// </summary>
         public RequestHandler Handler { set; get; }
+
+        /// <summary>
+        /// An event which will be fired upon occurence of internal errors
+        /// </summary>
+        public event EventHandler<Exception> OnInternalError;
 
 
         /// <summary>
@@ -139,19 +143,27 @@ namespace WWS.Internals
                 return;
 
             HttpListenerContext ctx = await listener.GetContextAsync();
-        
+
             try
             {
                 byte[] content = ctx.Request.InputStream.ToBytes();
-                WWSResponse resp = Handler(ctx.Request, content, ctx.Response);
-                
-                ctx.Response.ContentEncoding = WWSResponse.Codepage;
-                ctx.Response.ContentLength64 = resp.Length;
-                ctx.Response.OutputStream.Write(resp.Bytes ?? new byte[0], 0, resp.Length);
+                WWSResponse resp = await Handler(ctx.Request, content, ctx.Response);
+                byte[] ret = resp?.Bytes ?? new byte[0];
+
+                ctx.Response.ContentEncoding = resp.Codepage;
+                ctx.Response.ContentLength64 = ret.Length;
+                ctx.Response.OutputStream.Write(ret, 0, ret.Length);
+            }
+            catch (Exception ex)
+            {
+                OnInternalError?.Invoke(this, ex);
             }
             finally
             {
                 ctx.Response.OutputStream.Close();
+
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
             }
         }
     }

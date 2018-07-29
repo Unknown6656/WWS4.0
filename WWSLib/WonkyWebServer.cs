@@ -1,6 +1,7 @@
 ﻿using System.Security.Cryptography.X509Certificates;
 using System.Collections.ObjectModel;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using System.Security;
 using System.Linq;
 using System.Text;
@@ -19,20 +20,20 @@ namespace WWS
     /// </summary>
     /// <param name="data">The WWS4.0 request data</param>
     /// <returns>The WWS4.0 response data</returns>
-    public delegate WWSResponse WWSRequestHandler(WWSRequest data);
+    public delegate Task<WWSResponse> WWSRequestHandler(WWSRequest data);
 
     /// <summary>
     /// Represents a WonkyWebServer™ for event-based HTTP/HTTPS request processing.
     /// </summary>
+    /// <inheritdoc />
     public sealed class WonkyWebServer
+        : IWebServer<IWSConfiguration>
     {
-        private WWSConfiguration _config;
+        private IWSConfiguration _config;
         private HTTPServer _server;
 
-        /// <summary>
-        /// The server's configuration
-        /// </summary>
-        public WWSConfiguration Configuration
+        /// <inheritdoc />
+        public IWSConfiguration Configuration
         {
             set
             {
@@ -44,15 +45,17 @@ namespace WWS
             }
             get => _config;
         }
-        /// <summary>
-        /// Inidicates, whether the server is running
-        /// </summary>
+        /// <inheritdoc />
         public bool IsRunning { private set; get; }
 
         /// <summary>
         /// The event is fired upon each incoming HTTP or HTTPS request.
         /// </summary>
         public event WWSRequestHandler OnIncomingRequest;
+        /// <summary>
+        /// The event is fired upon an internal (server-side) error which results in an HTTP-500 status code.
+        /// </summary>
+        public event Func<WWSRequest, Exception, WWSResponse> On500Error;
 
 
         /// <summary>
@@ -67,11 +70,9 @@ namespace WWS
         /// Creates a new WonkyWebServer™ instance using the given configuration
         /// </summary>
         /// <param name="config">Server configuration</param>
-        public WonkyWebServer(WWSConfiguration config) => Configuration = config;
+        public WonkyWebServer(IWSConfiguration config) => Configuration = config;
 
-        /// <summary>
-        /// Starts the server
-        /// </summary>
+        /// <inheritdoc />
         public void Start()
         {
             lock (this)
@@ -91,9 +92,7 @@ namespace WWS
             }
         }
 
-        /// <summary>
-        /// Stops the server
-        /// </summary>
+        /// <inheritdoc />
         public void Stop()
         {
             lock (this)
@@ -142,14 +141,14 @@ namespace WWS
             return new byte[0];
         }
 
-        private WWSResponse OnIncoming(HttpListenerRequest req, byte[] content, HttpListenerResponse res)
+        private async Task<WWSResponse> OnIncoming(HttpListenerRequest req, byte[] content, HttpListenerResponse res)
         {
             if (req is null || res is null || content is null)
                 return null;
 
             DateTime utcnow = DateTime.UtcNow;
             WWSRequestHandler handler;
-            WWSConfiguration config;
+            IWSConfiguration config;
             var timestamp = new
             {
                 UTCRaw = utcnow,
@@ -204,42 +203,46 @@ namespace WWS
             servervars["SERVER_NAME"] = servervars["SERVER_ADDR"].Contains(':') ? $"[{servervars["SERVER_ADDR"]}]" : servervars["SERVER_ADDR"];
             servervars["SERVER_SIGNATURE"] = $"<address>{servervars["SERVER_SOFTWARE"]} Server at {req.LocalEndPoint.Address} Port {req.LocalEndPoint.Port}</address>";
             
-            WWSResponse rdat = (HttpStatusCode.ServiceUnavailable, "<h1>service unavailable</h1>");
+            WWSResponse rdat = (HttpStatusCode.ServiceUnavailable, "<h1>service unavailable</h1>", config.TextEncoding);
+            WWSRequest wwsrq = new WWSRequest
+            {
+                RawRequest = req,
+                RawResponse = res,
+                Cookies = cookies,
+                Content = content,
+                UTCRequestTime = utcnow,
+                ServerVariables = new ReadOnlyDictionary<string, string>(servervars),
+                GETVariables = new ReadOnlyDictionary<string, string>(Util.DecomposeQueryString(req.Url.Query)),
+            };
+
+            if (req.ContentType?.ToLower() == "application/x-www-form-urlencoded" && req.HttpMethod?.ToLower() == "post")
+                wwsrq.POSTVariables = new ReadOnlyDictionary<string, string>(Util.DecomposeQueryString(wwsrq.ContentString));
 
             if (handler != null)
                 try
                 {
-                    WWSRequest wwsrq = new WWSRequest
-                    {
-                        RawRequest = req,
-                        Cookies = cookies,
-                        Content = content,
-                        ServerVariables = new ReadOnlyDictionary<string, string>(servervars),
-                        GETVariables = new ReadOnlyDictionary<string, string>(Util.DecomposeQueryString(req.Url.Query)),
-                    };
-
-                    if (req.ContentType?.ToLower() == "application/x-www-form-urlencoded" && req.HttpMethod?.ToLower() == "post")
-                        wwsrq.POSTVariables = new ReadOnlyDictionary<string, string>(Util.DecomposeQueryString(wwsrq.ContentString));
-
-                    rdat = handler(wwsrq);
+                    rdat = await handler(wwsrq);
                 }
                 catch (Exception ex)
                 {
-                    StringBuilder sb = new StringBuilder();
-                    Exception e = ex ?? new Exception("An unexpected internal error occured.");
+                    bool handled = false;
 
-                    while (ex != null)
-                    {
-                        sb.Insert(0, $"[{ex.GetType().FullName}] {ex.Message}:\n{ex.StackTrace}\n");
+                    if (On500Error != null)
+                        try
+                        {
+                            rdat = On500Error(wwsrq, ex);
+                            handled = true;
+                        }
+                        catch
+                        {
+                        }
 
-                        ex = ex.InnerException;
-                    }
-
-                    rdat = (HttpStatusCode.InternalServerError, $@"
+                    if (!handled)
+                        rdat = (HttpStatusCode.InternalServerError, $@"
 <!doctype html>
 <html lang=""en"">
     <head>
-        <title>{e.GetType().FullName}</title>
+        <title>{ex.GetType().FullName}</title>
         <style>
             body {{
                 font-family: sans-serif;
@@ -248,11 +251,11 @@ namespace WWS
         </style>
     </head>
     <body>
-        <h1>An exception of the type <code>{e.GetType().FullName}</code> was thrown:</h1>
-<code style=""font-size: 1.5em"">{HttpUtility.HtmlEncode(sb.ToString())}</code>
+        <h1>An exception of the type <code>{ex.GetType().FullName}</code> was thrown:</h1>
+<code style=""font-size: 1.5em"">{HttpUtility.HtmlEncode(ex.PrintException())}</code>
     </body>
 </html>
-");
+", config.TextEncoding);
                 }
 
             res.StatusCode = (int)rdat.StatusCode;
@@ -307,9 +310,9 @@ namespace WWS
         /// </summary>
         public Uri RequestedURL => RawRequest.Url;
         /// <summary>
-        /// The requested HTTP/HTTPS URL path. In case of the requested URI 'https://example.org/my/file?param=value' the path would be '/my/file'.
+        /// The requested (unescaped) HTTP/HTTPS URL path. In case of the requested URI 'https://example.org/folder/my%20file?param=value' the path would be '/folder/my file'.
         /// </summary>
-        public string RequestedURLPath => RequestedURL.AbsolutePath;
+        public string RequestedURLPath => Uri.UnescapeDataString(RequestedURL.AbsolutePath);
         /// <summary>
         /// The HTTP/HTTP request method, e.g. GET, HEAD, POST, PUT, etc.
         /// </summary>
@@ -331,10 +334,20 @@ namespace WWS
         /// The sender's browser user agent
         /// </summary>
         public string UserAgent => RawRequest.UserAgent;
+        /// <summary>
+        /// The timestamp of the request (UTC)
+        /// </summary>
+        public DateTime UTCRequestTime { internal set; get; }
+
+        internal HttpListenerResponse RawResponse { set; get; }
+
 
         internal WWSRequest()
         {
         }
+        
+        /// <inheritdoc />
+        public override string ToString() => RawRequest?.RawUrl ?? GetType().FullName;
     }
 
     /// <summary>
@@ -342,10 +355,8 @@ namespace WWS
     /// </summary>
     public sealed class WWSResponse
     {
-        /// <summary>
-        /// The HTTP/HTTPS response's codepage
-        /// </summary>
-        public static Encoding Codepage { get; } = Encoding.UTF8; // Unicode or UTF8 or GetEncoding(1252) ?
+        internal static readonly Encoding ENC_ANSI = Encoding.GetEncoding(1252);
+
 
         /// <summary>
         /// The response bytes
@@ -363,6 +374,10 @@ namespace WWS
         /// The HTTP/HTTPS status return code
         /// </summary>
         public HttpStatusCode StatusCode { get; }
+        /// <summary>
+        /// The HTTP/HTTPS response's codepage
+        /// </summary>
+        public Encoding Codepage { get; } = WWSConfiguration.DefaultHTTPConfiguration.TextEncoding;
 
 
         /// <summary>
@@ -370,10 +385,9 @@ namespace WWS
         /// </summary>
         /// <param name="code">The HTTP/HTTPS status code</param>
         /// <param name="text">UTF-16 string</param>
-        public WWSResponse(HttpStatusCode code, string text)
-            : this(code, Codepage.GetBytes(text ?? ""))
-        {
-        }
+        /// <param name="enc">The output encoding</param>
+        public WWSResponse(HttpStatusCode code, string text, Encoding enc)
+            : this(code, ENC_ANSI.GetBytes(text ?? "")) => Codepage = enc;
 
         /// <summary>
         /// Creates a new HTTP/HTTPS response from the given byte array
@@ -392,48 +406,45 @@ namespace WWS
         /// <param name="t">Data</param>
         public static implicit operator WWSResponse((HttpStatusCode, byte[]) t) => new WWSResponse(t.Item1, t.Item2);
         /// <summary>
-        /// Converts the given UTF-16 string and status code to an UTF-8 encoded HTTP/HTTPS response
+        /// Converts the given UTF-16 string and status code to an HTTP/HTTPS response
         /// </summary>
         /// <param name="t">Data</param>
-        public static implicit operator WWSResponse((HttpStatusCode, string) t) => new WWSResponse(t.Item1, t.Item2);
+        public static implicit operator WWSResponse((HttpStatusCode, string, Encoding) t) => new WWSResponse(t.Item1, t.Item2, t.Item3);
         /// <summary>
         /// Converts the given byte array to an HTTP/HTTPS response
         /// </summary>
         /// <param name="bytes">Byte array</param>
         public static explicit operator WWSResponse(byte[] bytes) => (HttpStatusCode.OK, bytes);
         /// <summary>
-        /// Converts the given UTF-16 string to an UTF-8 encoded HTTP/HTTPS response
+        /// Converts the given UTF-16 string to a HTTP/HTTPS response
         /// </summary>
-        /// <param name="text">UTF-16 strings</param>
-        public static explicit operator WWSResponse(string text) => (HttpStatusCode.OK, text);
+        /// <param name="text">UTF-16 string</param>
+        public static explicit operator WWSResponse(string text) => (HttpStatusCode.OK, text, WWSConfiguration.DefaultHTTPConfiguration.TextEncoding);
     }
 
     /// <summary>
-    /// Represents a server configuration
+    /// Represents a server configuration for a WonkyWebServer™
     /// </summary>
+    /// <inheritdoc />
     public struct WWSConfiguration
+        : IWSConfiguration
     {
-        /// <summary>
-        /// The optional HTTPS configuration (a value of 'null' represents a HTTP server)
-        /// </summary>
+        /// <inheritdoc />
         public WWSHTTPSConfiguration? HTTPS { set; get; }
-
+        /// <inheritdoc />
         public bool UseConnectionUpgrade { set; get; }
-        
+        /// <inheritdoc />
         public ushort CachingAge { set; get; }
-        /// <summary>
-        /// The server's string (i.e. its name)
-        /// </summary>
+        /// <inheritdoc />
         public string ServerString { set; get; }
-        /// <summary>
-        /// The listening path (default is empty)
-        /// </summary>
+        /// <inheritdoc />
         public string ListeningPath { set; get; }
-        /// <summary>
-        /// The TCP/UDP port, on which the server is listening
-        /// </summary>
+        /// <inheritdoc />
         public ushort ListeningPort { set; get; }
-        
+        /// <inheritdoc />
+        public Encoding TextEncoding { get; set; }
+
+
         /// <summary>
         /// The default HTTP configuration
         /// </summary>
@@ -441,6 +452,7 @@ namespace WWS
         {
             ListeningPath = "",
             ListeningPort = 8080,
+            TextEncoding = Encoding.UTF8,
             ServerString = "WonkyWebStack™ (WWS4.0) Server",
             HTTPS = null
         };
@@ -449,11 +461,35 @@ namespace WWS
         /// </summary>
         public static WWSConfiguration DefaultHTTPSConfiguration { get; } = new WWSConfiguration
         {
-            ListeningPath = "",
             ListeningPort = 4430,
-            ServerString = "WonkyWebStack™ (WWS4.0) Server",
+            ListeningPath = DefaultHTTPConfiguration.ListeningPath,
+            TextEncoding = DefaultHTTPConfiguration.TextEncoding,
+            ServerString = DefaultHTTPConfiguration.ServerString,
             HTTPS = WWSHTTPSConfiguration.DefaultConfiguration
         };
+
+
+        internal static WWSConfiguration Convert(IWSConfiguration conf)
+        {
+            switch (conf)
+            {
+                case null:
+                    return DefaultHTTPConfiguration;
+                case WWSConfiguration c:
+                    return c;
+                default:
+                    return new WWSConfiguration
+                    {
+                        HTTPS = conf.HTTPS,
+                        CachingAge = conf.CachingAge,
+                        TextEncoding = conf.TextEncoding,
+                        ServerString = conf.ServerString,
+                        ListeningPath = conf.ListeningPath,
+                        ListeningPort = conf.ListeningPort,
+                        UseConnectionUpgrade = conf.UseConnectionUpgrade,
+                    };
+            }
+        }
     }
 
     /// <summary>

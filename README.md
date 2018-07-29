@@ -1,7 +1,7 @@
 # Wonky Webstack 4.0™
 
 A library for a simple HTTP and HTTPS webserver.
-<img height="256" src="wonky-certificate.jpg"/>
+<br/><img height="256" src="wonky-certificate.jpg"/>
 
 The usage of this libary is fairly simple:
 
