@@ -11,7 +11,7 @@ namespace Test
         public static void Main(string[] args)
         {
             DodgyWebServer srv = new DodgyWebServer(DWSConfiguration.DefaultHTTPConfiguration);
-            
+
             Console.WriteLine($"Listening on {srv.Configuration.ListeningPort}. Press ESC to exit.");
 
             srv.Start();

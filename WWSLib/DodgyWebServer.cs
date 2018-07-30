@@ -71,10 +71,10 @@ namespace WWS
 
                 EnqueueLog($"RSP: {r} {res.Length} bytes ({Util.BytesToString(res.Length)})");
 
-                cnt = (cnt + 1) % 6;
+                cnt = (cnt + 1) % 10;
 
                 if (cnt == 0 || res.Length > 0x1FFFFF)
-                    Cleanup();
+                    GC.Collect();
 
                 return res;
             };
