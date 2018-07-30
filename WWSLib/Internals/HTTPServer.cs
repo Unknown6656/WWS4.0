@@ -2,6 +2,8 @@
 using System.Threading;
 using System.Net;
 using System;
+using System.Diagnostics;
+using System.IO;
 
 
 namespace WWS.Internals
@@ -75,6 +77,7 @@ namespace WWS.Internals
 
             Port = port;
             _listener.Prefixes.Add($"http{(https ? "s" : "")}://*:{port}/{subpath ?? ""}");
+            _listener.TimeoutManager.MinSendBytesPerSecond = uint.MaxValue;
         }
 
         /// <summary>
@@ -98,19 +101,18 @@ namespace WWS.Internals
 
             _listener.Start();
 
-            ThreadPool.QueueUserWorkItem(_ =>
-                 Task.Factory.StartNew(async () =>
-                 {
-                     while (true)
-                     {
-                         lock (this)
-                             if (IsDisposed)
-                                 break;
+            Task.Factory.StartNew(async () =>
+            {
+                while (true)
+                {
+                    lock (this)
+                        if (IsDisposed)
+                            break;
 
-                         if (_listener.IsListening)
-                             await Listen(_listener);
-                     }
-                 }, TaskCreationOptions.LongRunning));
+                    if (_listener.IsListening)
+                        await Listen(_listener);
+                }
+            }, TaskCreationOptions.LongRunning);
         }
 
         /// <summary>
@@ -152,18 +154,14 @@ namespace WWS.Internals
 
                 ctx.Response.ContentEncoding = resp.Codepage;
                 ctx.Response.ContentLength64 = ret.Length;
-                ctx.Response.OutputStream.Write(ret, 0, ret.Length);
+
+                using (Stream os = ctx.Response.OutputStream)
+                    await os.WriteAsync(ret, 0, ret.Length);
             }
             catch (Exception ex)
+            when (!Debugger.IsAttached)
             {
                 OnInternalError?.Invoke(this, ex);
-            }
-            finally
-            {
-                ctx.Response.OutputStream.Close();
-
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
             }
         }
     }

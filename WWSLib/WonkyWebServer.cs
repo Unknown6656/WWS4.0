@@ -2,6 +2,7 @@
 using System.Collections.ObjectModel;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using System.Diagnostics;
 using System.Security;
 using System.Linq;
 using System.Text;
@@ -18,9 +19,10 @@ namespace WWS
     /// <summary>
     /// Represents a delegate for the processing of incoming WWS4.0 (HTTP/HTTPS) requests.
     /// </summary>
+    /// <param name="sender">The sender which raised the event</param>
     /// <param name="data">The WWS4.0 request data</param>
     /// <returns>The WWS4.0 response data</returns>
-    public delegate Task<WWSResponse> WWSRequestHandler(WWSRequest data);
+    public delegate Task<WWSResponse> WWSRequestHandler(WonkyWebServer sender, WWSRequest data);
 
     /// <summary>
     /// Represents a WonkyWebServer™ for event-based HTTP/HTTPS request processing.
@@ -55,7 +57,7 @@ namespace WWS
         /// <summary>
         /// The event is fired upon an internal (server-side) error which results in an HTTP-500 status code.
         /// </summary>
-        public event Func<WWSRequest, Exception, WWSResponse> On500Error;
+        public event Func<WonkyWebServer, WWSRequest, Exception, WWSResponse> On500Error;
 
 
         /// <summary>
@@ -221,16 +223,17 @@ namespace WWS
             if (handler != null)
                 try
                 {
-                    rdat = await handler(wwsrq);
+                    rdat = await handler(this, wwsrq);
                 }
                 catch (Exception ex)
+                when (!Debugger.IsAttached)
                 {
                     bool handled = false;
 
                     if (On500Error != null)
                         try
                         {
-                            rdat = On500Error(wwsrq, ex);
+                            rdat = On500Error(this, wwsrq, ex);
                             handled = true;
                         }
                         catch
@@ -345,9 +348,9 @@ namespace WWS
         internal WWSRequest()
         {
         }
-        
+
         /// <inheritdoc />
-        public override string ToString() => RawRequest?.RawUrl ?? GetType().FullName;
+        public override string ToString() => $"{RequestID} --> {HTTPRequestMethod} {RawRequest?.RawUrl} (c: {string.Concat(Cookies.Select(kvp => $"{kvp.Key}={kvp.Value}"))})";
     }
 
     /// <summary>
@@ -531,9 +534,19 @@ namespace WWS
         };
     }
 
+    /// <summary>
+    /// Reprents a HTTPS certificate policy regarding the keeping or disposal of encryption certificates bound to the TCP/UDP HTTPS port after server shutdown.
+    /// </summary>
     public enum WWSHTTPSCertificatePolicy
     {
+        /// <summary>
+        /// The certificate should be kept in the Firewall rules, Registry entries and the local certificate store after server shutdown.
+        /// It is possible, that duplicate entries may exist in the listed sites after an involuntary shutdown.
+        /// </summary>
         KeepCertificate,
+        /// <summary>
+        /// The certificate should be removed from the Firewall rules, Registry entries and the local certificate store after server shutdown.
+        /// </summary>
         DisposeCertificate
     }
 }

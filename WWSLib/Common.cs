@@ -4,6 +4,13 @@ using System;
 
 namespace WWS
 {
+    /// <summary>
+    /// Represents an indexing delegate which returns a reference to the indexed value
+    /// </summary>
+    /// <typeparam name="I">Generic index type</typeparam>
+    /// <typeparam name="V">Generic value type</typeparam>
+    /// <param name="arg">Index</param>
+    /// <returns>Return value reference</returns>
     public delegate ref V RefFunc<in I, V>(I arg);
 
 

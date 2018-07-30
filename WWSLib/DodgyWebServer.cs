@@ -13,13 +13,10 @@ using System;
 using Microsoft.CodeAnalysis.CSharp.Scripting;
 using Microsoft.CodeAnalysis.Scripting;
 
+using Newtonsoft.Json;
+
 using WWS.Internals;
 
-
-/*
- * TODO: PERFORMANCE IMPROVEMENTS:
- *  o  COMPILE COMMON SCRIPT AT STARTUP
- */
 
 namespace WWS
 {
@@ -31,7 +28,8 @@ namespace WWS
         : IWebServer<DWSConfiguration>
     {
         private static readonly Regex _ws_regex = new Regex(@"<\?(?<print>\=)?\s*(?<expr>.*?)\s*\?>", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
-        private static readonly Dictionary<string, ScriptRunner<string>> _precompiled = new Dictionary<string, ScriptRunner<string>>();
+        private readonly Dictionary<string, ScriptRunner<string>> _precompiled = new Dictionary<string, ScriptRunner<string>>();
+        private readonly Queue<string> _log_queue = new Queue<string>();
         private readonly WonkyWebServer _wws;
         private DWSConfiguration _config;
 
@@ -60,8 +58,11 @@ namespace WWS
 
         private DodgyWebServer(WonkyWebServer wws)
         {
+            _log_queue.Enqueue(new string('-', 70));
+            EnqueueLog("Server .ctor called");
+
             _wws = wws ?? new WonkyWebServer();
-            _wws.On500Error += (r, e) =>
+            _wws.On500Error += (_, r, e) =>
             {
                 using (Task<WWSResponse> task = Handle500(r, e))
                 {
@@ -70,7 +71,16 @@ namespace WWS
                     return task.Result;
                 }
             };
-            _wws.OnIncomingRequest += OnIncomingRequestAsync;
+            _wws.OnIncomingRequest += async (s, r) =>
+            {
+                WWSResponse res = await OnIncomingRequestAsync(s, r);
+
+                EnqueueLog($"RSP: {r} {res.Length} bytes ({Util.BytesToString(res.Length)})");
+
+                return res;
+            };
+
+            EnqueueLog("Server created");
         }
 
         /// <inheritdoc/>
@@ -86,26 +96,95 @@ namespace WWS
                 _precompiled.Clear();
 
             _wws.Start();
+
+            EnqueueLog("Server started");
+            EnqueueLog($"Configuration:\n{JsonConvert.SerializeObject(_config, Formatting.Indented)}");
+
+            Task.Run(async delegate
+            {
+                void flush()
+                {
+                    FileInfo log = new FileInfo(_config.LogPath);
+                    List<string> lines = new List<string>();
+
+                    if (!log.Exists)
+                    {
+                        if (!log.Directory?.Exists ?? false)
+                            log.Directory.Create();
+
+                        using (FileStream fs = log.Create())
+                            fs.Close();
+                    }
+
+                    lock (_log_queue)
+                        while (_log_queue.Count > 0)
+                            lines.Add(_log_queue.Dequeue());
+                    try
+                    {
+                        Util.TimeoutRetry(() => File.AppendAllLines(log.FullName, lines), 2000);
+                    }
+                    catch
+                    {
+                        lock (_log_queue)
+                        {
+                            foreach (string line in lines)
+                                _log_queue.Enqueue(line);
+
+                            _log_queue.Enqueue("Failed to print to log.");
+                        }
+
+                        Task.Delay(1000);
+                    }
+                }
+
+                EnqueueLog("Logging thread started");
+
+                while (IsRunning)
+                {
+                    await Task.Delay(100);
+
+                    flush();
+                }
+
+                EnqueueLog("Logging thread stopped");
+
+                await Task.Delay(400);
+
+                flush();
+            });
         }
 
         /// <inheritdoc/>
-        public void Stop() => _wws.Stop();
+        public void Stop()
+        {
+            EnqueueLog("Server stopped");
+
+            _wws.Stop();
+        }
 
         /// <summary>
         /// Cleans the internal data storages (a bit)
         /// </summary>
         public void Cleanup()
         {
+            EnqueueLog("Server cleanup");
+
             lock (_precompiled)
                 _precompiled.Clear();
 
             GC.Collect();
             GC.WaitForPendingFinalizers();
         }
-        
-        private async Task<WWSResponse> OnIncomingRequestAsync(WWSRequest data)
+
+        private void EnqueueLog(string msg)
         {
-            Console.WriteLine($"{data.RequestID} acessing {data.RequestedURL}");
+            lock (_log_queue)
+                _log_queue.Enqueue($"[UTC: {DateTime.UtcNow:ddd, yyyy-MMM-dd HH:mm:ss.ffffff}]  {msg.Trim()}");
+        }
+
+        private async Task<WWSResponse> OnIncomingRequestAsync(WonkyWebServer _, WWSRequest data)
+        {
+            EnqueueLog($"REQ: {data}");
 
             string rpath = Configuration.Webroot.FullName + data.RequestedURLPath;
             DirectoryInfo rdir = new DirectoryInfo(rpath);
@@ -130,9 +209,11 @@ namespace WWS
                         byte[] bytes = new byte[nfo.Length];
 
                         using (FileStream fs = nfo.OpenRead())
-                            fs.Read(bytes, 0, bytes.Length);
+                            await fs.ReadAsync(bytes, 0, bytes.Length);
 
                         data.RawResponse.ContentType = nfo.GetMIMEType();
+
+                        EnqueueLog($"200: {data} ({data.RawResponse.ContentType})");
 
                         return (HttpStatusCode.OK, bytes);
                     }
@@ -196,21 +277,25 @@ return OUT.ToString();
 ").ToString();
         }
 
-        private static ScriptRunner<string> PrecompileAsync(FileInfo nfo)
+        private ScriptRunner<string> PrecompileAsync(FileInfo nfo)
         {
+            EnqueueLog($"Accessing script file '{nfo.FullName}'.");
+
             ScriptRunner<string> del;
             string hash;
             bool res;
 
             using (MD5 md5 = MD5.Create())
             using (FileStream fs = nfo.OpenRead())
-                hash = string.Concat(md5.ComputeHash(fs).Select(b => b.ToString("x2")));
+                hash = string.Concat(md5.ComputeHash(fs).Select(b => b.ToString("X2")));
 
             lock (_precompiled)
                 res = _precompiled.TryGetValue(hash, out del);
 
             if (!res)
             {
+                EnqueueLog($"Precompiling '{nfo.FullName}'...");
+
                 string code = GenerateCSCode(nfo);
                 ScriptOptions options = ScriptOptions.Default.WithReferences(typeof(ServerHost).Assembly);
 
@@ -220,6 +305,8 @@ return OUT.ToString();
                 lock (_precompiled)
                     _precompiled[hash] = del;
             }
+            else
+                EnqueueLog($"'{nfo.FullName}' cached with the hash {hash}.");
 
             return del;
         }
@@ -250,6 +337,8 @@ return OUT.ToString();
 
                 string res = await PrecompileAsync(nfo)(host);
 
+                EnqueueLog($"200: {req}");
+
                 return (HttpStatusCode.OK, res, _config.TextEncoding);
             }
             catch (Exception ex)
@@ -265,7 +354,11 @@ return OUT.ToString();
             return nfo.Exists ? await ProcessFileAsync(nfo, req, mod) : otherwise();
         }
 
-        private async Task<WWSResponse> Handle403(WWSRequest req) => await HandleError(req, Configuration._404Path, null, () => (HttpStatusCode.Forbidden, $@"
+        private async Task<WWSResponse> Handle403(WWSRequest req)
+        {
+            EnqueueLog($"403: {req}");
+
+            return await HandleError(req, Configuration._404Path, null, () => (HttpStatusCode.Forbidden, $@"
 <!doctype html>
 <html lang=""en"">
     <head>
@@ -311,8 +404,13 @@ return OUT.ToString();
     </body>
 </html>
 ", _config.TextEncoding));
+        }
 
-        private async Task<WWSResponse> Handle404(WWSRequest req) => await HandleError(req, Configuration._404Path, null, () => (HttpStatusCode.NotFound, $@"
+        private async Task<WWSResponse> Handle404(WWSRequest req)
+        {
+            EnqueueLog($"404: {req}");
+
+            return await HandleError(req, Configuration._404Path, null, () => (HttpStatusCode.NotFound, $@"
 <!doctype html>
 <html lang=""en"">
     <head>
@@ -330,8 +428,14 @@ return OUT.ToString();
     </body>
 </html>
 ", _config.TextEncoding));
+        }
 
-        private async Task<WWSResponse> Handle500(WWSRequest req, Exception ex) => await HandleError(req, Configuration._500Path, h => h._EXCEPTION = ex, () => (HttpStatusCode.InternalServerError, $@"
+        private async Task<WWSResponse> Handle500(WWSRequest req, Exception ex)
+        {
+            EnqueueLog($"Internal Exception:\n{ex.PrintException()}");
+            EnqueueLog($"500: {req}");
+
+            return await HandleError(req, Configuration._500Path, h => h._EXCEPTION = ex, () => (HttpStatusCode.InternalServerError, $@"
 <!doctype html>
 <html lang=""en"">
     <head>
@@ -349,9 +453,12 @@ return OUT.ToString();
     </body>
 </html>
 ", _config.TextEncoding));
+        }
 
         private WWSResponse EnumDirectory(WWSRequest req, DirectoryInfo dir)
         {
+            EnqueueLog($"200: Enumerating directory '{dir}', {req}");
+
             EnumerationData curr = new EnumerationData
             {
                 Info = dir,
@@ -555,6 +662,14 @@ return OUT.ToString();
         /// Ignores the case for the server variables '_GET', '_POST' and '_SERVER'
         /// </summary>
         public bool IgnoreCaseOnVariables { set; get; }
+        /// <summary>
+        /// Determines whether a log should be created and filled with inbound connection data.
+        /// </summary>
+        public bool UseLog { set; get; }
+        /// <summary>
+        /// The path pointing to the connection log file (relative to the current working directory).
+        /// </summary>
+        public string LogPath { set; get; }
 
         /// <summary>
         /// The default HTTP configuration
@@ -598,6 +713,8 @@ return OUT.ToString();
                 _403Path = "/403.html",
                 _404Path = "/404.html",
                 _500Path = "/500.html",
+                LogPath = "wws.log",
+                UseLog = true,
                 Webroot = new DirectoryInfo("./www"),
             };
         }

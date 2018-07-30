@@ -1,5 +1,6 @@
 ﻿using System.Security.Cryptography.X509Certificates;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System;
 
@@ -70,6 +71,25 @@ namespace WWS.Internals
             }
 
             return dic;
+        }
+
+        internal static void TimeoutRetry(Action action, int timeout, Action<Exception> handler = null)
+        {
+            Stopwatch time = Stopwatch.StartNew();
+
+            while (time.ElapsedMilliseconds < timeout)
+                try
+                {
+                    action();
+
+                    return;
+                }
+                catch (Exception e)
+                {
+                    handler?.Invoke(e);
+                }
+
+            throw new TimeoutException("Failed perform action within allowed time.");
         }
     }
 
