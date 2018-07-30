@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System;
+using System.Threading.Tasks;
 
 using NetFwTypeLib;
 
@@ -37,6 +38,20 @@ namespace WWS.Internals
 
             s.Position = 0;
             s.Read(arr, 0, arr.Length);
+
+            return arr;
+        }
+
+        internal static async Task<byte[]> ToBytesAsync(this Stream s)
+        {
+            if (s is null)
+                return new byte[0];
+
+            s.Position = 0;
+
+            byte[] arr = new byte[s.Length];
+
+            await s.ReadAsync(arr, 0, arr.Length);
 
             return arr;
         }

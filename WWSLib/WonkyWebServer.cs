@@ -1,13 +1,13 @@
 ﻿using System.Security.Cryptography.X509Certificates;
 using System.Collections.ObjectModel;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using System.Diagnostics;
 using System.Security;
 using System.Linq;
 using System.Text;
 using System.Web;
 using System.Net;
-using System.IO;
 using System;
 
 using WWS.Internals;
@@ -21,7 +21,7 @@ namespace WWS
     /// <param name="sender">The sender which raised the event</param>
     /// <param name="data">The WWS4.0 request data</param>
     /// <returns>The WWS4.0 response data</returns>
-    public delegate WWSResponse WWSRequestHandler(WonkyWebServer sender, WWSRequest data);
+    public delegate Task<WWSResponse> WWSRequestHandler(WonkyWebServer sender, WWSRequest data);
 
 
     /// <summary>
@@ -57,7 +57,7 @@ namespace WWS
         /// <summary>
         /// The event is fired upon an internal (server-side) error which results in an HTTP-500 status code.
         /// </summary>
-        public event Func<WonkyWebServer, WWSRequest, Exception, WWSResponse> On500Error;
+        public event Func<WonkyWebServer, WWSRequest, Exception, Task<WWSResponse>> On500Error;
 
 
         /// <summary>
@@ -126,29 +126,20 @@ namespace WWS
 
         private void VerifyConfig()
         {
-            // TODO
+            if (Configuration.TextEncoding is null)
+                throw new InvalidConfigurationException($"The property '{nameof(WWSConfiguration.TextEncoding)}' cannot be null.");
+
+            // TODO : ?
         }
 
-        private static byte[] GetRequestPostData(HttpListenerRequest request)
-        {
-            if (request.HasEntityBody)
-                using (Stream s = request.InputStream)
-                using (MemoryStream ms = new MemoryStream())
-                {
-                    s.CopyTo(ms);
-
-                    return ms.ToArray();
-                }
-
-            return new byte[0];
-        }
-
-        private WWSResponse OnIncoming(HttpListenerRequest req, byte[] content, HttpListenerResponse res)
+        private async Task<WWSResponse> OnIncoming(HttpListenerRequest req, byte[] content, HttpListenerResponse res)
         {
             if (req is null || res is null || content is null)
                 return null;
 
             DateTime utcnow = DateTime.UtcNow;
+            IPEndPoint ipep_server = req?.LocalEndPoint ?? new IPEndPoint(IPAddress.IPv6Any, _config.ListeningPort);
+            IPEndPoint ipep_remote = req.RemoteEndPoint ?? new IPEndPoint(IPAddress.Broadcast, ushort.MaxValue - 1);
             WWSRequestHandler handler;
             IWSConfiguration config;
             var timestamp = new
@@ -190,20 +181,23 @@ namespace WWS
                 ["SERVER_PROTOCOL"] = "HTTP/" + req.ProtocolVersion,
                 ["DATE_UTC"] = utcnow.ToString("yyyy-MM-dd"),
                 ["TIME_UTC"] = utcnow.ToString("HH:mm:ss"),
+                ["LOCALAPPDATA"] = Environment.ExpandEnvironmentVariables("%localappdata%"),
+                ["APPDATA"] = Environment.ExpandEnvironmentVariables("%appdata%"),
+                ["COMSPEC"] = Environment.ExpandEnvironmentVariables("%comspec%"),
                 ["PATH"] = Environment.ExpandEnvironmentVariables("%path%"),
                 ["PATHEXT"] = Environment.ExpandEnvironmentVariables("%pathext%"),
                 ["WINDIR"] = Environment.ExpandEnvironmentVariables("%windir%"),
                 ["SERVER_SOFTWARE"] = $"<address>WWS/4.0 (Win{(Environment.Is64BitOperatingSystem ? 64 : 32)}) WonkySSL/4.0",
-                ["SERVER_PORT"] = req.LocalEndPoint.Port.ToString(),
-                ["SERVER_ADDR"] = req.LocalEndPoint.Address.ToString(),
-                ["REMOTE_PORT"] = req.RemoteEndPoint.Port.ToString(),
-                ["REMOTE_ADDR"] = req.RemoteEndPoint.Address.ToString(),
+                ["SERVER_PORT"] = ipep_server.Port.ToString(),
+                ["SERVER_ADDR"] = ipep_server.Address.ToString(),
+                ["REMOTE_PORT"] = ipep_remote.Port.ToString(),
+                ["REMOTE_ADDR"] = ipep_remote.Address.ToString(),
             };
 
             servervars["SCRIPT_NAME"] = servervars["REQUEST_PATH"];
             servervars["HTTP_HOST"] =
             servervars["SERVER_NAME"] = servervars["SERVER_ADDR"].Contains(':') ? $"[{servervars["SERVER_ADDR"]}]" : servervars["SERVER_ADDR"];
-            servervars["SERVER_SIGNATURE"] = $"<address>{servervars["SERVER_SOFTWARE"]} Server at {req.LocalEndPoint.Address} Port {req.LocalEndPoint.Port}</address>";
+            servervars["SERVER_SIGNATURE"] = $"<address>{servervars["SERVER_SOFTWARE"]} Server at {ipep_remote.Address} Port {ipep_remote.Port}</address>";
             
             WWSResponse rdat = (HttpStatusCode.ServiceUnavailable, "<h1>service unavailable</h1>", config.TextEncoding);
             WWSRequest wwsrq = new WWSRequest
@@ -223,7 +217,7 @@ namespace WWS
             if (handler != null)
                 try
                 {
-                    rdat = handler(this, wwsrq);
+                    rdat = await handler(this, wwsrq);
                 }
                 catch (Exception ex)
                 when (!Debugger.IsAttached)
@@ -233,7 +227,7 @@ namespace WWS
                     if (On500Error != null)
                         try
                         {
-                            rdat = On500Error(this, wwsrq, ex);
+                            rdat = await On500Error(this, wwsrq, ex);
                             handled = true;
                         }
                         catch

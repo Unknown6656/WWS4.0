@@ -61,19 +61,31 @@ namespace WWS
             _log_queue.Enqueue(new string('-', 150));
             EnqueueLog("Server .ctor called");
 
+            int cnt = 0;
+
             _wws = wws ?? new WonkyWebServer();
-            _wws.On500Error += (_, r, e) => Handle500(r, e);
-            _wws.OnIncomingRequest += (s, r) =>
+            _wws.On500Error += async (_, r, e) => await Handle500Async(r, e);
+            _wws.OnIncomingRequest += async (s, r) =>
             {
-                WWSResponse res = OnIncomingRequest(s, r);
+                WWSResponse res = await OnIncomingRequestAsync(s, r);
 
                 EnqueueLog($"RSP: {r} {res.Length} bytes ({Util.BytesToString(res.Length)})");
+
+                cnt = (cnt + 1) % 6;
+
+                if (cnt == 0 || res.Length > 0x1FFFFF)
+                    Cleanup();
 
                 return res;
             };
 
             EnqueueLog("Server created");
         }
+
+        /// <summary>
+        /// Default destructor for <see cref="DodgyWebServer"/>
+        /// </summary>
+        ~DodgyWebServer() => Stop();
 
         private void VerifyConfiguration()
         {
@@ -114,59 +126,7 @@ namespace WWS
 
             EnqueueLog("Server started");
             EnqueueLog($"Configuration:\n{JsonConvert.SerializeObject(_config, Formatting.Indented)}");
-
-            Task.Run(async delegate
-            {
-                void flush()
-                {
-                    FileInfo log = new FileInfo(_config.LogPath);
-                    List<string> lines = new List<string>();
-
-                    if (!log.Exists)
-                    {
-                        if (!log.Directory?.Exists ?? false)
-                            log.Directory.Create();
-
-                        using (FileStream fs = log.Create())
-                            fs.Close();
-                    }
-
-                    lock (_log_queue)
-                    {
-                        while (_log_queue.Count > 0)
-                            lines.Add(_log_queue.Dequeue());
-
-                        try
-                        {
-                            Util.TimeoutRetry(() => File.AppendAllLines(log.FullName, lines), 2000);
-                        }
-                        catch
-                        {
-                            foreach (string line in lines)
-                                _log_queue.Enqueue(line);
-
-                            _log_queue.Enqueue("Failed to print to log.");
-
-                            Task.Delay(1000);
-                        }
-                    }
-                }
-
-                EnqueueLog("Logging thread started");
-
-                while (IsRunning)
-                {
-                    await Task.Delay(100);
-
-                    flush();
-                }
-
-                EnqueueLog("Logging thread stopped");
-
-                await Task.Delay(400);
-
-                flush();
-            });
+            StartLogger();
         }
 
         /// <inheritdoc/>
@@ -191,13 +151,52 @@ namespace WWS
             GC.WaitForPendingFinalizers();
         }
 
+        private void StartLogger() => Task.Run(async delegate
+        {
+            FileInfo log = new FileInfo(_config.LogPath);
+
+            if (!log.Exists)
+            {
+                if (!log.Directory?.Exists ?? false)
+                    log.Directory.Create();
+            }
+
+            using (FileStream fs = new FileStream(log.FullName, FileMode.Append, FileAccess.Write, FileShare.Read))
+            using (StreamWriter wr = new StreamWriter(fs, Encoding.Default))
+            {
+                void write()
+                {
+                    lock (_log_queue)
+                        while (_log_queue.Count > 0)
+                            wr.WriteLine(_log_queue.Dequeue().Trim());
+
+                    wr.Flush();
+                }
+
+                EnqueueLog("Logging thread started");
+
+                while (IsRunning)
+                {
+                    await Task.Delay(100);
+
+                    write();
+                }
+
+                EnqueueLog("Logging thread stopped");
+
+                await Task.Delay(400);
+
+                write();
+            }
+        });
+
         private void EnqueueLog(string msg)
         {
             lock (_log_queue)
                 _log_queue.Enqueue($"[UTC: {DateTime.UtcNow:ddd, yyyy-MMM-dd HH:mm:ss.ffffff}]  {msg.Trim()}");
         }
 
-        private WWSResponse OnIncomingRequest(WonkyWebServer _, WWSRequest data)
+        private async Task<WWSResponse> OnIncomingRequestAsync(WonkyWebServer _, WWSRequest data)
         {
             EnqueueLog($"REQ: {data}");
 
@@ -216,15 +215,15 @@ namespace WWS
 
                 if (nfo.Exists)
                     if (Regex.IsMatch(nfo.Name, Configuration.DisallowRegex, RegexOptions.Compiled | RegexOptions.IgnoreCase))
-                        return Handle403(data);
+                        return await Handle403Async(data);
                     else if (Regex.IsMatch(nfo.Name, Configuration.ProcessableRegex, RegexOptions.Compiled | RegexOptions.IgnoreCase))
-                        return ProcessFile(nfo, data);
+                        return await ProcessFileAsync(nfo, data);
                     else
                     {
                         byte[] bytes = new byte[nfo.Length];
 
                         using (FileStream fs = nfo.OpenRead())
-                            fs.Read(bytes, 0, bytes.Length);
+                            await fs.ReadAsync(bytes, 0, bytes.Length);
 
                         data.RawResponse.ContentType = nfo.GetMIMEType();
 
@@ -238,13 +237,13 @@ namespace WWS
             }
             catch
             {
-                return Handle403(data);
+                return await Handle403Async(data);
             }
 
-            return Handle404(data);
+            return await Handle404Async(data);
         }
 
-        private static string GenerateCSCode(FileInfo nfo)
+        private static async Task<string> GenerateCSCodeAsync(FileInfo nfo)
         {
             int lind = 0;
             string content;
@@ -272,7 +271,7 @@ void echoln(object o) => OUT.AppendLine(o?.ToString() ?? """");
 
             using (FileStream fs = nfo.OpenRead())
             using (StreamReader rd = new StreamReader(fs, WWSResponse.ENC_ANSI))
-                content = rd.ReadToEnd();
+                content = await rd.ReadToEndAsync();
 
             void print_esc(string s) => sb.AppendLine($"echo(\"{string.Concat((s ?? "").Select(x => $"\\u{(int)x:x4}"))}\");");
 
@@ -292,7 +291,7 @@ return OUT.ToString();
 ").ToString();
         }
 
-        private ScriptRunner<string> PrecompileAsync(FileInfo nfo)
+        private async Task<ScriptRunner<string>> PrecompileAsync(FileInfo nfo)
         {
             EnqueueLog($"Accessing script file '{nfo.FullName}'.");
 
@@ -311,7 +310,7 @@ return OUT.ToString();
             {
                 EnqueueLog($"Precompiling '{nfo.FullName}'...");
 
-                string code = GenerateCSCode(nfo);
+                string code = await GenerateCSCodeAsync(nfo);
                 ScriptOptions options = ScriptOptions.Default.WithReferences(typeof(ServerHost).Assembly);
 
                 del = CSharpScript.Create<string>(code, options, typeof(ServerHost))
@@ -326,7 +325,7 @@ return OUT.ToString();
             return del;
         }
 
-        private WWSResponse ProcessFile(FileInfo nfo, WWSRequest req, Action<ServerHost> mod = null)
+        private async Task<WWSResponse> ProcessFileAsync(FileInfo nfo, WWSRequest req, Action<ServerHost> mod = null)
         {
             try
             {
@@ -350,14 +349,7 @@ return OUT.ToString();
 
                 mod?.Invoke(host);
 
-                string res;
-
-                using (Task<string> tt = Task.Run(async() => await PrecompileAsync(nfo)(host)))
-                {
-                    tt.Wait();
-
-                    res = tt.Result;
-                }
+                string res = await (await PrecompileAsync(nfo))(host);
 
                 EnqueueLog($"200: {req}");
 
@@ -365,25 +357,25 @@ return OUT.ToString();
             }
             catch (Exception ex)
             {
-                return Handle500(req, ex);
+                return await Handle500Async(req, ex);
             }
         }
 
-        private WWSResponse HandleError(WWSRequest req, string dpath, Action<ServerHost> mod, Func<WWSResponse> otherwise)
+        private async Task<WWSResponse> HandleErrorAsync(WWSRequest req, string dpath, Action<ServerHost> mod, Func<WWSResponse> otherwise)
         {
             if (dpath.Replace('\\', '/').StartsWith("/"))
                 dpath = dpath.Substring(1);
 
             FileInfo nfo = new FileInfo(_config.Webroot.FullName + '/' + dpath);
 
-            return nfo.Exists ? ProcessFile(nfo, req, mod) : otherwise();
+            return nfo.Exists ? await ProcessFileAsync(nfo, req, mod) : otherwise();
         }
 
-        private WWSResponse Handle403(WWSRequest req)
+        private async Task<WWSResponse> Handle403Async(WWSRequest req)
         {
             EnqueueLog($"403: {req}");
 
-            return HandleError(req, Configuration._404Path, null, () => (HttpStatusCode.Forbidden, $@"
+            return await HandleErrorAsync(req, Configuration._404Path, null, () => (HttpStatusCode.Forbidden, $@"
 <!doctype html>
 <html lang=""en"">
     <head>
@@ -431,11 +423,11 @@ return OUT.ToString();
 ", _config.TextEncoding));
         }
 
-        private WWSResponse Handle404(WWSRequest req)
+        private async Task<WWSResponse> Handle404Async(WWSRequest req)
         {
             EnqueueLog($"404: {req}");
 
-            return HandleError(req, Configuration._404Path, null, () => (HttpStatusCode.NotFound, $@"
+            return await HandleErrorAsync(req, Configuration._404Path, null, () => (HttpStatusCode.NotFound, $@"
 <!doctype html>
 <html lang=""en"">
     <head>
@@ -455,12 +447,12 @@ return OUT.ToString();
 ", _config.TextEncoding));
         }
 
-        private WWSResponse Handle500(WWSRequest req, Exception ex)
+        private async Task<WWSResponse> Handle500Async(WWSRequest req, Exception ex)
         {
             EnqueueLog($"Internal Exception:\n{ex.PrintException()}");
             EnqueueLog($"500: {req}");
 
-            return HandleError(req, Configuration._500Path, h => h._EXCEPTION = ex, () => (HttpStatusCode.InternalServerError, $@"
+            return await HandleErrorAsync(req, Configuration._500Path, h => h._EXCEPTION = ex, () => (HttpStatusCode.InternalServerError, $@"
 <!doctype html>
 <html lang=""en"">
     <head>
@@ -493,7 +485,7 @@ return OUT.ToString();
                 Type = "Directory"
             };
 
-            IEnumerable<EnumerationData> entries = (req.RequestedURLPath != "/" ? new[] {
+            EnumerationData[] entries = (req.RequestedURLPath != "/" ? new[] {
                 curr, new EnumerationData
                 {
                     Info = dir.Parent,
@@ -517,7 +509,7 @@ return OUT.ToString();
                 Size = fi.Length,
                 Name = fi.Name,
                 Type = $"{fi.GetMIMEType()} ({fi.Extension})"
-            }));
+            })).ToArray();
 
             string printentry(EnumerationData entry)
             {
@@ -594,7 +586,7 @@ return OUT.ToString();
         <a href=""."">Refresh directory index</a>
     	<br/>
     	<br/>
-        {entries.Count()} Entries:
+        {entries.Length} Entries:
     	<br/>
     	<table width=""100%"" border=""0"">
     		<tr>
