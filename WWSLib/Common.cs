@@ -215,4 +215,20 @@ namespace WWS
         /// <param name="setter">Setter function</param>
         public WriteOnlyIndexer(Action<I, V> setter) => Setter = setter ?? throw new ArgumentException("The setter function must not be null.", nameof(setter));
     }
+
+    /// <summary>
+    /// Represents an exception thrown due to an invalid server configuration
+    /// </summary>
+    public sealed class InvalidConfigurationException
+        : InvalidOperationException
+    {
+        /// <summary>
+        /// Creates a new instance containing the given message
+        /// </summary>
+        /// <param name="msg">Exception message</param>
+        public InvalidConfigurationException(string msg)
+            : base(msg)
+        {
+        }
+    }
 }

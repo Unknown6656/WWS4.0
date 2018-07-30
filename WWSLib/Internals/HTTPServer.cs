@@ -16,6 +16,7 @@ namespace WWS.Internals
     /// <returns>The WWS response data</returns>
     public delegate WWSResponse RequestHandler(HttpListenerRequest req, byte[] content, HttpListenerResponse res);
 
+
     /// <summary>
     /// Represents a simple HTTP/HTTPS server
     /// </summary>
@@ -143,10 +144,10 @@ namespace WWS.Internals
             if (Handler is null)
                 return;
 
-            HttpListenerContext ctx = listener.GetContext();
-
             try
             {
+                HttpListenerContext ctx = listener.GetContext();
+
                 byte[] content = ctx.Request.InputStream.ToBytes();
                 WWSResponse resp = Handler(ctx.Request, content, ctx.Response);
                 byte[] ret = resp?.Bytes ?? new byte[0];
@@ -158,7 +159,6 @@ namespace WWS.Internals
                     os.WriteAsync(ret, 0, ret.Length);
             }
             catch (Exception ex)
-            when (!Debugger.IsAttached)
             {
                 OnInternalError?.Invoke(this, ex);
             }

@@ -58,7 +58,7 @@ namespace WWS
 
         private DodgyWebServer(WonkyWebServer wws)
         {
-            _log_queue.Enqueue(new string('-', 70));
+            _log_queue.Enqueue(new string('-', 150));
             EnqueueLog("Server .ctor called");
 
             _wws = wws ?? new WonkyWebServer();
@@ -75,14 +75,37 @@ namespace WWS
             EnqueueLog("Server created");
         }
 
-        /// <inheritdoc/>
-        public void Start()
+        private void VerifyConfiguration()
         {
-            if (_config.Webroot is null)
-                _config.Webroot = DWSConfiguration.DefaultHTTPConfiguration.Webroot;
+            void verify_regex(string reg, string desc)
+            {
+                try
+                {
+                    _ = new Regex(reg);
+                }
+                catch
+                {
+                    throw new InvalidConfigurationException($"The configuration has an invalid regular expression '{reg}' for the property '{desc}'. The server was unable to start.");
+                }
+            }
+
+            _config.Webroot = _config.Webroot ?? DWSConfiguration.DefaultHTTPConfiguration.Webroot;
+            _config._403Path = _config._403Path ?? DWSConfiguration.DefaultHTTPConfiguration._403Path;
+            _config._404Path = _config._404Path ?? DWSConfiguration.DefaultHTTPConfiguration._404Path;
+            _config._500Path = _config._500Path ?? DWSConfiguration.DefaultHTTPConfiguration._500Path;
+
+            verify_regex(_config.IndexRegex, nameof(DWSConfiguration.IndexRegex));
+            verify_regex(_config.DisallowRegex, nameof(DWSConfiguration.DisallowRegex));
+            verify_regex(_config.ProcessableRegex, nameof(DWSConfiguration.ProcessableRegex));
 
             if (!_config.Webroot.Exists)
                 _config.Webroot.Create();
+        }
+
+        /// <inheritdoc/>
+        public void Start()
+        {
+            VerifyConfiguration();
 
             lock (_precompiled)
                 _precompiled.Clear();
@@ -109,23 +132,23 @@ namespace WWS
                     }
 
                     lock (_log_queue)
+                    {
                         while (_log_queue.Count > 0)
                             lines.Add(_log_queue.Dequeue());
-                    try
-                    {
-                        Util.TimeoutRetry(() => File.AppendAllLines(log.FullName, lines), 2000);
-                    }
-                    catch
-                    {
-                        lock (_log_queue)
+
+                        try
+                        {
+                            Util.TimeoutRetry(() => File.AppendAllLines(log.FullName, lines), 2000);
+                        }
+                        catch
                         {
                             foreach (string line in lines)
                                 _log_queue.Enqueue(line);
 
                             _log_queue.Enqueue("Failed to print to log.");
-                        }
 
-                        Task.Delay(1000);
+                            Task.Delay(1000);
+                        }
                     }
                 }
 
@@ -348,7 +371,10 @@ return OUT.ToString();
 
         private WWSResponse HandleError(WWSRequest req, string dpath, Action<ServerHost> mod, Func<WWSResponse> otherwise)
         {
-            FileInfo nfo = new FileInfo(dpath);
+            if (dpath.Replace('\\', '/').StartsWith("/"))
+                dpath = dpath.Substring(1);
+
+            FileInfo nfo = new FileInfo(_config.Webroot.FullName + '/' + dpath);
 
             return nfo.Exists ? ProcessFile(nfo, req, mod) : otherwise();
         }

@@ -23,6 +23,7 @@ namespace WWS
     /// <returns>The WWS4.0 response data</returns>
     public delegate WWSResponse WWSRequestHandler(WonkyWebServer sender, WWSRequest data);
 
+
     /// <summary>
     /// Represents a WonkyWebServer™ for event-based HTTP/HTTPS request processing.
     /// </summary>
