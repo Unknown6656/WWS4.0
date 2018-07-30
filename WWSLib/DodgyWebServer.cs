@@ -62,18 +62,10 @@ namespace WWS
             EnqueueLog("Server .ctor called");
 
             _wws = wws ?? new WonkyWebServer();
-            _wws.On500Error += (_, r, e) =>
+            _wws.On500Error += (_, r, e) => Handle500(r, e);
+            _wws.OnIncomingRequest += (s, r) =>
             {
-                using (Task<WWSResponse> task = Handle500(r, e))
-                {
-                    task.RunSynchronously();
-
-                    return task.Result;
-                }
-            };
-            _wws.OnIncomingRequest += async (s, r) =>
-            {
-                WWSResponse res = await OnIncomingRequestAsync(s, r);
+                WWSResponse res = OnIncomingRequest(s, r);
 
                 EnqueueLog($"RSP: {r} {res.Length} bytes ({Util.BytesToString(res.Length)})");
 
@@ -182,7 +174,7 @@ namespace WWS
                 _log_queue.Enqueue($"[UTC: {DateTime.UtcNow:ddd, yyyy-MMM-dd HH:mm:ss.ffffff}]  {msg.Trim()}");
         }
 
-        private async Task<WWSResponse> OnIncomingRequestAsync(WonkyWebServer _, WWSRequest data)
+        private WWSResponse OnIncomingRequest(WonkyWebServer _, WWSRequest data)
         {
             EnqueueLog($"REQ: {data}");
 
@@ -201,15 +193,15 @@ namespace WWS
 
                 if (nfo.Exists)
                     if (Regex.IsMatch(nfo.Name, Configuration.DisallowRegex, RegexOptions.Compiled | RegexOptions.IgnoreCase))
-                        return await Handle403(data);
+                        return Handle403(data);
                     else if (Regex.IsMatch(nfo.Name, Configuration.ProcessableRegex, RegexOptions.Compiled | RegexOptions.IgnoreCase))
-                        return await ProcessFileAsync(nfo, data);
+                        return ProcessFile(nfo, data);
                     else
                     {
                         byte[] bytes = new byte[nfo.Length];
 
                         using (FileStream fs = nfo.OpenRead())
-                            await fs.ReadAsync(bytes, 0, bytes.Length);
+                            fs.Read(bytes, 0, bytes.Length);
 
                         data.RawResponse.ContentType = nfo.GetMIMEType();
 
@@ -223,10 +215,10 @@ namespace WWS
             }
             catch
             {
-                return await Handle403(data);
+                return Handle403(data);
             }
 
-            return await Handle404(data);
+            return Handle404(data);
         }
 
         private static string GenerateCSCode(FileInfo nfo)
@@ -311,7 +303,7 @@ return OUT.ToString();
             return del;
         }
 
-        private async Task<WWSResponse> ProcessFileAsync(FileInfo nfo, WWSRequest req, Action<ServerHost> mod = null)
+        private WWSResponse ProcessFile(FileInfo nfo, WWSRequest req, Action<ServerHost> mod = null)
         {
             try
             {
@@ -335,7 +327,14 @@ return OUT.ToString();
 
                 mod?.Invoke(host);
 
-                string res = await PrecompileAsync(nfo)(host);
+                string res;
+
+                using (Task<string> tt = Task.Run(async() => await PrecompileAsync(nfo)(host)))
+                {
+                    tt.Wait();
+
+                    res = tt.Result;
+                }
 
                 EnqueueLog($"200: {req}");
 
@@ -343,22 +342,22 @@ return OUT.ToString();
             }
             catch (Exception ex)
             {
-                return await Handle500(req, ex);
+                return Handle500(req, ex);
             }
         }
 
-        private async Task<WWSResponse> HandleError(WWSRequest req, string dpath, Action<ServerHost> mod, Func<WWSResponse> otherwise)
+        private WWSResponse HandleError(WWSRequest req, string dpath, Action<ServerHost> mod, Func<WWSResponse> otherwise)
         {
             FileInfo nfo = new FileInfo(dpath);
 
-            return nfo.Exists ? await ProcessFileAsync(nfo, req, mod) : otherwise();
+            return nfo.Exists ? ProcessFile(nfo, req, mod) : otherwise();
         }
 
-        private async Task<WWSResponse> Handle403(WWSRequest req)
+        private WWSResponse Handle403(WWSRequest req)
         {
             EnqueueLog($"403: {req}");
 
-            return await HandleError(req, Configuration._404Path, null, () => (HttpStatusCode.Forbidden, $@"
+            return HandleError(req, Configuration._404Path, null, () => (HttpStatusCode.Forbidden, $@"
 <!doctype html>
 <html lang=""en"">
     <head>
@@ -406,11 +405,11 @@ return OUT.ToString();
 ", _config.TextEncoding));
         }
 
-        private async Task<WWSResponse> Handle404(WWSRequest req)
+        private WWSResponse Handle404(WWSRequest req)
         {
             EnqueueLog($"404: {req}");
 
-            return await HandleError(req, Configuration._404Path, null, () => (HttpStatusCode.NotFound, $@"
+            return HandleError(req, Configuration._404Path, null, () => (HttpStatusCode.NotFound, $@"
 <!doctype html>
 <html lang=""en"">
     <head>
@@ -430,12 +429,12 @@ return OUT.ToString();
 ", _config.TextEncoding));
         }
 
-        private async Task<WWSResponse> Handle500(WWSRequest req, Exception ex)
+        private WWSResponse Handle500(WWSRequest req, Exception ex)
         {
             EnqueueLog($"Internal Exception:\n{ex.PrintException()}");
             EnqueueLog($"500: {req}");
 
-            return await HandleError(req, Configuration._500Path, h => h._EXCEPTION = ex, () => (HttpStatusCode.InternalServerError, $@"
+            return HandleError(req, Configuration._500Path, h => h._EXCEPTION = ex, () => (HttpStatusCode.InternalServerError, $@"
 <!doctype html>
 <html lang=""en"">
     <head>

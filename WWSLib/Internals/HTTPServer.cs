@@ -1,9 +1,8 @@
 ﻿using System.Threading.Tasks;
-using System.Threading;
-using System.Net;
-using System;
 using System.Diagnostics;
+using System.Net;
 using System.IO;
+using System;
 
 
 namespace WWS.Internals
@@ -15,7 +14,7 @@ namespace WWS.Internals
     /// <param name="content">The HTTP/HTTPS request content</param>
     /// <param name="res">The HTTP/HTTPS response data</param>
     /// <returns>The WWS response data</returns>
-    public delegate Task<WWSResponse> RequestHandler(HttpListenerRequest req, byte[] content, HttpListenerResponse res);
+    public delegate WWSResponse RequestHandler(HttpListenerRequest req, byte[] content, HttpListenerResponse res);
 
     /// <summary>
     /// Represents a simple HTTP/HTTPS server
@@ -101,7 +100,7 @@ namespace WWS.Internals
 
             _listener.Start();
 
-            Task.Factory.StartNew(async () =>
+            Task.Factory.StartNew(() =>
             {
                 while (true)
                 {
@@ -110,7 +109,7 @@ namespace WWS.Internals
                             break;
 
                     if (_listener.IsListening)
-                        await Listen(_listener);
+                        Listen(_listener);
                 }
             }, TaskCreationOptions.LongRunning);
         }
@@ -139,24 +138,24 @@ namespace WWS.Internals
         /// </summary>
         public void Dispose() => Stop();
 
-        internal async Task Listen(HttpListener listener)
+        internal void Listen(HttpListener listener)
         {
             if (Handler is null)
                 return;
 
-            HttpListenerContext ctx = await listener.GetContextAsync();
+            HttpListenerContext ctx = listener.GetContext();
 
             try
             {
                 byte[] content = ctx.Request.InputStream.ToBytes();
-                WWSResponse resp = await Handler(ctx.Request, content, ctx.Response);
+                WWSResponse resp = Handler(ctx.Request, content, ctx.Response);
                 byte[] ret = resp?.Bytes ?? new byte[0];
 
                 ctx.Response.ContentEncoding = resp.Codepage;
                 ctx.Response.ContentLength64 = ret.Length;
 
                 using (Stream os = ctx.Response.OutputStream)
-                    await os.WriteAsync(ret, 0, ret.Length);
+                    os.WriteAsync(ret, 0, ret.Length);
             }
             catch (Exception ex)
             when (!Debugger.IsAttached)

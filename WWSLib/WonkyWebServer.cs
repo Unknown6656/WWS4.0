@@ -1,7 +1,6 @@
 ﻿using System.Security.Cryptography.X509Certificates;
 using System.Collections.ObjectModel;
 using System.Collections.Generic;
-using System.Threading.Tasks;
 using System.Diagnostics;
 using System.Security;
 using System.Linq;
@@ -22,7 +21,7 @@ namespace WWS
     /// <param name="sender">The sender which raised the event</param>
     /// <param name="data">The WWS4.0 request data</param>
     /// <returns>The WWS4.0 response data</returns>
-    public delegate Task<WWSResponse> WWSRequestHandler(WonkyWebServer sender, WWSRequest data);
+    public delegate WWSResponse WWSRequestHandler(WonkyWebServer sender, WWSRequest data);
 
     /// <summary>
     /// Represents a WonkyWebServer™ for event-based HTTP/HTTPS request processing.
@@ -143,7 +142,7 @@ namespace WWS
             return new byte[0];
         }
 
-        private async Task<WWSResponse> OnIncoming(HttpListenerRequest req, byte[] content, HttpListenerResponse res)
+        private WWSResponse OnIncoming(HttpListenerRequest req, byte[] content, HttpListenerResponse res)
         {
             if (req is null || res is null || content is null)
                 return null;
@@ -223,7 +222,7 @@ namespace WWS
             if (handler != null)
                 try
                 {
-                    rdat = await handler(this, wwsrq);
+                    rdat = handler(this, wwsrq);
                 }
                 catch (Exception ex)
                 when (!Debugger.IsAttached)
