@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.Diagnostics;
+using System.Threading;
 using System.Linq;
 using System.Text;
 using System.Net;
@@ -31,6 +32,7 @@ namespace WWS
         private readonly Dictionary<string, ScriptRunner<string>> _precompiled = new Dictionary<string, ScriptRunner<string>>();
         private readonly Queue<string> _log_queue = new Queue<string>();
         private readonly WonkyWebServer _wws;
+        private WWSDatabaseConnector _dbcon;
         private DWSConfiguration _config;
 
 
@@ -65,11 +67,16 @@ namespace WWS
 
             _wws = wws ?? new WonkyWebServer();
             _wws.On500Error += async (_, r, e) => await Handle500Async(r, e);
-            _wws.OnIncomingRequest += async (s, r) =>
+            _wws.OnIncomingRequest += async (_, r) =>
             {
-                WWSResponse res = await OnIncomingRequestAsync(s, r);
-
+                WWSResponse res = await OnIncomingRequestAsync(r);
+#if DEBUG
+                if (r.RequestedURLPath.ToLower() == "/~sql")
+                    return await DebugSQL(r);
+#endif
                 EnqueueLog($"RSP: {r} {res.Length} bytes ({Util.BytesToString(res.Length)})");
+
+                _dbcon.LogConnection(r, res);
 
                 cnt = (cnt + 1) % 10;
 
@@ -115,7 +122,25 @@ namespace WWS
         }
 
         /// <inheritdoc/>
+        [Obsolete("Use `WWS.DodgyWebServer.StartAsync : void -> Task` instead.")]
         public void Start()
+        {
+            using (Task task = StartAsync())
+            {
+                bool c = false;
+
+                task.GetAwaiter().OnCompleted(() => c = true);
+                task.Wait();
+
+                while (!c)
+                    Thread.Sleep(0);
+            }
+        }
+        
+        /// <summary>
+        /// Starts the webserver
+        /// </summary>
+        public async Task StartAsync()
         {
             VerifyConfiguration();
 
@@ -127,6 +152,9 @@ namespace WWS
             EnqueueLog("Server started");
             EnqueueLog($"Configuration:\n{JsonConvert.SerializeObject(_config, Formatting.Indented)}");
             StartLogger();
+
+            if (_config.UseDatabase)
+                await StartDatabaseAsync();
         }
 
         /// <inheritdoc/>
@@ -135,6 +163,9 @@ namespace WWS
             EnqueueLog("Server stopped");
 
             _wws.Stop();
+
+            if (_config.UseDatabase)
+                StopDatabase();
         }
 
         /// <summary>
@@ -150,6 +181,22 @@ namespace WWS
             GC.Collect();
             GC.WaitForPendingFinalizers();
         }
+
+        private async Task StartDatabaseAsync()
+        {
+            _dbcon = new WWSDatabaseConnector(_config.DatabasePath);
+            _dbcon.OnSQLCommandIssued += (_, sql) =>
+            {
+                sql = Regex.Replace(sql, @"[\r\n\s ]+", " ");
+                sql = Regex.Replace(sql, @"'[^\']+'", m => m.Length > 20 ? "'.....'" : m.ToString());
+
+                EnqueueLog($"SQL command issued: \"{sql}\"");
+            };
+
+            await _dbcon.ConnectAsync();
+        }
+
+        private void StopDatabase() => _dbcon.Disconnect();
 
         private void StartLogger() => Task.Run(async delegate
         {
@@ -196,7 +243,35 @@ namespace WWS
                 _log_queue.Enqueue($"[UTC: {DateTime.UtcNow:ddd, yyyy-MMM-dd HH:mm:ss.ffffff}]  {msg.Trim()}");
         }
 
-        private async Task<WWSResponse> OnIncomingRequestAsync(WonkyWebServer _, WWSRequest data)
+#if DEBUG
+        private async Task<WWSResponse> DebugSQL(WWSRequest req)
+        {
+            try
+            {
+                string q = req.GETVariables["q"];
+                IDictionary<string, dynamic>[] res = await _dbcon.ExecuteAsync(q);
+
+                return (HttpStatusCode.OK, $@"
+<html>
+    <body style=""font-family: sans-serif"">
+        {res.Length} entries:
+        <hr/>
+        <table wdith=""100%"">
+            <tr>{string.Concat(res.FirstOrDefault()?.Keys.Select(k => $"<th>{k}</th>") ?? new string[0])}</tr>
+            {string.Concat(res.Select(row => $"<tr>{string.Concat(row.Keys.Select(k => $"<td>{row[k]}</td>"))}</tr>"))}
+        </table>
+    </body>
+</html>
+", _config.TextEncoding);
+            }
+            catch (Exception ex)
+            {
+                return await Handle500Async(req, ex);
+            }
+        }
+#endif
+
+        private async Task<WWSResponse> OnIncomingRequestAsync(WWSRequest data)
         {
             EnqueueLog($"REQ: {data}");
 
@@ -680,13 +755,25 @@ return OUT.ToString();
         /// </summary>
         public bool IgnoreCaseOnVariables { set; get; }
         /// <summary>
-        /// Determines whether a log should be created and filled with inbound connection data.
+        /// Determines whether a physical log file should be created and filled with inbound connection data.
         /// </summary>
         public bool UseLog { set; get; }
         /// <summary>
-        /// The path pointing to the connection log file (relative to the current working directory).
+        /// The path pointing to the physical connection log file (relative to the current working directory).
         /// </summary>
         public string LogPath { set; get; }
+        /// <summary>
+        /// The path pointing to the WWS4.0™ Database file (default: './database/wws.mdf')
+        /// </summary>
+        public string DatabasePath { set; get; }
+        /// <summary>
+        /// The database's data source (default: '.\SQLEXPRESS')
+        /// </summary>
+        public string DatabaseSource { set; get; }
+        /// <summary>
+        /// Determines whether the T-SQL database should be used in the background
+        /// </summary>
+        public bool UseDatabase { set; get; }
 
         /// <summary>
         /// The default HTTP configuration
@@ -731,6 +818,9 @@ return OUT.ToString();
                 _404Path = "/404.html",
                 _500Path = "/500.html",
                 LogPath = "wws.log",
+                DatabasePath = "database/wws.mdf",
+                DatabaseSource = @"(LocalDB)\MSSQLLocalDB",
+                UseDatabase = true,
                 UseLog = true,
                 Webroot = new DirectoryInfo("./www"),
             };

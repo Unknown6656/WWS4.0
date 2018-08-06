@@ -59,5 +59,58 @@ namespace WWS.Properties {
                 resourceCulture = value;
             }
         }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to CREATE TABLE [dbo].[__WWS__Connections] (
+        ///    [ID]           BIGINT          NOT NULL,
+        ///    [HostID]       BIGINT          DEFAULT ((0)) NOT NULL,
+        ///    [TimestampUTC]    DATETIME        DEFAULT ((0)) NOT NULL,
+        ///    [RequestedURI] NVARCHAR (2048) DEFAULT (&apos;&apos;) NOT NULL,
+        ///    [Cookies]      NVARCHAR (2048) DEFAULT (&apos;&apos;) NOT NULL,
+        ///    [HTTPMethod]   VARCHAR (16)    DEFAULT (&apos;GET&apos;) NOT NULL,
+        ///    [StatusCode]   INT        NULL,
+        ///    [RemotePort]   INT        DEFAULT (0xFFFE) NOT NULL,
+        ///    PRIMARY KEY CLUSTERED [rest of string was truncated]&quot;;.
+        /// </summary>
+        internal static string dbo___WWS__Connections {
+            get {
+                return ResourceManager.GetString("dbo___WWS__Connections", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to CREATE TABLE [dbo].[__WWS__IPData] (
+        ///    [HostID]        BIGINT         NOT NULL,
+        ///    [ISP]           NVARCHAR (256) DEFAULT (&apos;&apos;) NOT NULL,
+        ///    [Organization]  NVARCHAR (256) DEFAULT (&apos;&apos;) NOT NULL,
+        ///    [CountryCode]   VARCHAR (2)    DEFAULT (&apos;??&apos;) NOT NULL,
+        ///    [Country]       VARCHAR (128)  DEFAULT (&apos;&apos;) NOT NULL,
+        ///    [RegionCode]    VARCHAR (2)    DEFAULT (&apos;??&apos;) NOT NULL,
+        ///    [Region]        VARCHAR (128)  DEFAULT (&apos;&apos;) NOT NULL,
+        ///    [City]          NVARCHAR (128) DEFAULT (&apos;&apos;) NOT NULL,
+        ///    [Latitu [rest of string was truncated]&quot;;.
+        /// </summary>
+        internal static string dbo___WWS__IPData {
+            get {
+                return ResourceManager.GetString("dbo___WWS__IPData", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to CREATE TABLE [dbo].[__WWS__RemoteHosts] (
+        ///    [ID]        BIGINT        NOT NULL,
+        ///    [IPAddress] VARCHAR (64)  DEFAULT (&apos;[::]&apos;) NOT NULL,
+        ///    [UserAgent] NVARCHAR (512) DEFAULT (&apos;&apos;) NOT NULL,
+        ///    PRIMARY KEY CLUSTERED ([ID] ASC),
+        ///    CONSTRAINT [RemoteHost] UNIQUE NONCLUSTERED ([IPAddress] ASC, [UserAgent] ASC)
+        ///);
+        ///
+        ///.
+        /// </summary>
+        internal static string dbo___WWS__RemoteHosts {
+            get {
+                return ResourceManager.GetString("dbo___WWS__RemoteHosts", resourceCulture);
+            }
+        }
     }
 }

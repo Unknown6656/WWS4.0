@@ -335,6 +335,10 @@ namespace WWS
         /// The timestamp of the request (UTC)
         /// </summary>
         public DateTime UTCRequestTime { internal set; get; }
+        /// <summary>
+        /// The string representing the current cookie collection
+        /// </summary>
+        public string CookieString => string.Join("&", Cookies.Select(kvp => Uri.EscapeDataString(kvp.Key) + '=' + Uri.EscapeDataString(kvp.Value.Value)));
 
         internal HttpListenerResponse RawResponse { set; get; }
 

@@ -196,8 +196,11 @@
     <Compile Include="DodgyWebServer.cs" />
     <Compile Include="Internals\CertificateInstaller.cs" />
     <Compile Include="Internals\HTTPServer.cs" />
+    <Compile Include="Internals\IPData.cs" />
     <Compile Include="Internals\MimeTypes.cs" />
+    <Compile Include="Internals\RewriteEngine.cs" />
     <Compile Include="Internals\Util.cs" />
+    <Compile Include="Internals\WWSDatabaseConnector.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Properties\Resources.Designer.cs">
       <AutoGen>True</AutoGen>
@@ -246,6 +249,9 @@
     <Analyzer Include="..\packages\Microsoft.CodeAnalysis.Analyzers.2.6.1\analyzers\dotnet\cs\Microsoft.CodeAnalysis.CSharp.Analyzers.dll" />
   </ItemGroup>
   <ItemGroup>
+    <Content Include="Database\dbo.__WWS__Connections.sql" />
+    <Content Include="Database\dbo.__WWS__IPData.sql" />
+    <Content Include="Database\dbo.__WWS__RemoteHosts.sql" />
     <Content Include="Database\wws.mdf">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>

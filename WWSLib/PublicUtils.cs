@@ -29,7 +29,7 @@ namespace WWS
         }
 
         /// <summary>
-        /// Execute's an async Task<T> method which has a void return value synchronously
+        /// ExecuteAsync's an async Task<T> method which has a void return value synchronously
         /// </summary>
         /// <param name="task">Task<T> method to execute</param>
         public static void RunSync(this Func<Task> task)
@@ -62,7 +62,7 @@ namespace WWS
         }
 
         /// <summary>
-        /// Execute's an async Task<T> method which has a T return type synchronously
+        /// ExecuteAsync's an async Task<T> method which has a T return type synchronously
         /// </summary>
         /// <typeparam name="T">Return Type</typeparam>
         /// <param name="task">Task<T> method to execute</param>
@@ -116,6 +116,19 @@ namespace WWS
             }
 
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// Runs the given task in an asynchronous context
+        /// </summary>
+        /// <param name="task">Task to be executed</param>
+        /// <exception cref="ArgumentNullException">Thrown if the given task is `null`.</exception>
+        public static void RunAsync(this Func<Task> task)
+        {
+            if (task is null)
+                throw new ArgumentNullException(nameof(task));
+
+            ThreadPool.QueueUserWorkItem(_ => Task.Run(task), null);
         }
 
 

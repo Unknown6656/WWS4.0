@@ -1,4 +1,5 @@
-﻿using System.Threading;
+﻿using System.Threading.Tasks;
+using System.Threading;
 using System;
 
 using WWS;
@@ -8,13 +9,13 @@ namespace Test
 {
     public static class Program
     {
-        public static void Main(string[] args)
+        public static async Task Main(string[] args)
         {
             DodgyWebServer srv = new DodgyWebServer(DWSConfiguration.DefaultHTTPConfiguration);
 
             Console.WriteLine($"Listening on {srv.Configuration.ListeningPort}. Press ESC to exit.");
 
-            srv.Start();
+            await srv.StartAsync();
 
             do
                 Thread.Sleep(200);

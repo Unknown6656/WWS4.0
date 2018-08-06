@@ -1,9 +1,10 @@
 ﻿using System.Security.Cryptography.X509Certificates;
+using System.Text.RegularExpressions;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using System.Diagnostics;
 using System.IO;
 using System;
-using System.Threading.Tasks;
 
 using NetFwTypeLib;
 
@@ -105,6 +106,17 @@ namespace WWS.Internals
                 }
 
             throw new TimeoutException("Failed perform action within allowed time.");
+        }
+
+        internal static bool Match(this string s, string p, out Match m, RegexOptions o = RegexOptions.Compiled | RegexOptions.IgnoreCase) => (m = Regex.Match(s, p, o)).Success;
+
+        internal static bool Match(this string s, string p, out GroupCollection c, RegexOptions o = RegexOptions.Compiled | RegexOptions.IgnoreCase)
+        {
+            bool r = s.Match(p, out Match m, o);
+
+            c = m.Groups;
+
+            return r;
         }
     }
 
