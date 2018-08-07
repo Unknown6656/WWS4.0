@@ -34,6 +34,8 @@ namespace WWS
         private readonly Dictionary<string, ScriptRunner<string>> _precompiled = new Dictionary<string, ScriptRunner<string>>();
         private readonly Queue<string> _log_queue = new Queue<string>();
         private readonly WonkyWebServer _wws;
+
+        private volatile int _conn_cnt = 0;
         private WWSDatabaseConnector _dbcon;
         private DWSConfiguration _config;
 
@@ -65,29 +67,10 @@ namespace WWS
             _log_queue.Enqueue(new string('-', 150));
             EnqueueLog("Server .ctor called");
 
-            int cnt = 0;
-
             _wws = wws ?? new WonkyWebServer();
             _wws.On500Error += async (_, r, e) => await Handle500Async(r, e);
-            _wws.OnIncomingRequest += async (_, r) =>
-            {
-                WWSResponse res = await OnIncomingRequestAsync(r);
-#if DEBUG
-                if (r.RequestedURLPath.ToLower() == "/~sql")
-                    return await DebugSQL(r);
-#endif
-                EnqueueLog($"RSP: {r} {res.Length} bytes ({Util.BytesToString(res.Length)})");
-
-                _dbcon.LogConnection(r, res);
-
-                cnt = (cnt + 1) % 10;
-
-                if (cnt == 0 || res.Length > 0x1FFFFF)
-                    GC.Collect();
-
-                return res;
-            };
-
+            _wws.OnIncomingRequest += OnIncomingRequestAsync;
+            
             EnqueueLog("Server created");
         }
 
@@ -95,33 +78,6 @@ namespace WWS
         /// Default destructor for <see cref="DodgyWebServer"/>
         /// </summary>
         ~DodgyWebServer() => Stop();
-
-        private void VerifyConfiguration()
-        {
-            void verify_regex(string reg, string desc)
-            {
-                try
-                {
-                    _ = new Regex(reg);
-                }
-                catch
-                {
-                    throw new InvalidConfigurationException($"The configuration has an invalid regular expression '{reg}' for the property '{desc}'. The server was unable to start.");
-                }
-            }
-
-            _config.Webroot = _config.Webroot ?? DWSConfiguration.DefaultHTTPConfiguration.Webroot;
-            _config._403Path = _config._403Path ?? DWSConfiguration.DefaultHTTPConfiguration._403Path;
-            _config._404Path = _config._404Path ?? DWSConfiguration.DefaultHTTPConfiguration._404Path;
-            _config._500Path = _config._500Path ?? DWSConfiguration.DefaultHTTPConfiguration._500Path;
-
-            verify_regex(_config.IndexRegex, nameof(DWSConfiguration.IndexRegex));
-            verify_regex(_config.DisallowRegex, nameof(DWSConfiguration.DisallowRegex));
-            verify_regex(_config.ProcessableRegex, nameof(DWSConfiguration.ProcessableRegex));
-
-            if (!_config.Webroot.Exists)
-                _config.Webroot.Create();
-        }
 
         /// <inheritdoc/>
         [Obsolete("Use `WWS.DodgyWebServer.StartAsync : void -> Task` instead.")]
@@ -184,6 +140,35 @@ namespace WWS
             GC.WaitForPendingFinalizers();
         }
 
+#region INTERNALS
+
+        private void VerifyConfiguration()
+        {
+            void verify_regex(string reg, string desc)
+            {
+                try
+                {
+                    _ = new Regex(reg);
+                }
+                catch
+                {
+                    throw new InvalidConfigurationException($"The configuration has an invalid regular expression '{reg}' for the property '{desc}'. The server was unable to start.");
+                }
+            }
+
+            _config.Webroot = _config.Webroot ?? DWSConfiguration.DefaultHTTPConfiguration.Webroot;
+            _config._403Path = _config._403Path ?? DWSConfiguration.DefaultHTTPConfiguration._403Path;
+            _config._404Path = _config._404Path ?? DWSConfiguration.DefaultHTTPConfiguration._404Path;
+            _config._500Path = _config._500Path ?? DWSConfiguration.DefaultHTTPConfiguration._500Path;
+
+            verify_regex(_config.IndexRegex, nameof(DWSConfiguration.IndexRegex));
+            verify_regex(_config.DisallowRegex, nameof(DWSConfiguration.DisallowRegex));
+            verify_regex(_config.ProcessableRegex, nameof(DWSConfiguration.ProcessableRegex));
+
+            if (!_config.Webroot.Exists)
+                _config.Webroot.Create();
+        }
+
         private async Task StartDatabaseAsync()
         {
             _dbcon = new WWSDatabaseConnector(_config.DatabasePath);
@@ -244,7 +229,6 @@ namespace WWS
             lock (_log_queue)
                 _log_queue.Enqueue($"[UTC: {DateTime.UtcNow:ddd, yyyy-MMM-dd HH:mm:ss.ffffff}]  {msg.Trim()}");
         }
-
 #if DEBUG
         private async Task<WWSResponse> DebugSQL(WWSRequest req)
         {
@@ -272,8 +256,63 @@ namespace WWS
             }
         }
 #endif
+        private HTTPRewriteResult RewriteRequest(WWSRequest req)
+        {
+            string p_rwr = Configuration.RewritePath ?? "/.htaccess";
 
-        private async Task<WWSResponse> OnIncomingRequestAsync(WWSRequest data)
+            if (p_rwr.Replace('\\', '/').StartsWith("/"))
+                p_rwr = p_rwr.Substring(1);
+
+            FileInfo nfo = new FileInfo(_config.Webroot.FullName + '/' + p_rwr);
+            HTTPRewriteRule[] rules = null;
+
+            if (!nfo.Exists)
+            {
+                string htaccess = File.ReadAllText(nfo.FullName);
+
+                rules = HTTPRewriteEngine.ParseRules(htaccess);
+            }
+
+            return HTTPRewriteEngine.ProcessURI(req, Configuration, rules);
+        }
+
+        private async Task<WWSResponse> OnIncomingRequestAsync(WonkyWebServer _, WWSRequest req)
+        {
+            HTTPRewriteResult rwres = RewriteRequest(req);
+
+            if (rwres?.Cookies != null)
+                foreach (KeyValuePair<string, string> kvp in rwres.EnvironmentVariables)
+                    Environment.SetEnvironmentVariable(kvp.Key, kvp.Value, EnvironmentVariableTarget.Process);
+
+            if (rwres?.Cookies != null)
+                foreach (KeyValuePair<string, (string, TimeSpan)> cookie in rwres.Cookies)
+                    req.Cookies[cookie.Key] = (cookie.Value.Item1, req.UTCRequestTime.Add(cookie.Value.Item2));
+
+
+            // TODO : do something with the rewrite result
+
+
+            lock (_._ot_override)
+                _._ot_override = rwres;
+
+            WWSResponse res = await ProcessRequestAsync(req);
+#if DEBUG
+            if (req.RequestedURLPath.ToLower() == "/~sql")
+                return await DebugSQL(req);
+#endif
+            EnqueueLog($"RSP: {req} {res.Length} bytes ({Util.BytesToString(res.Length)})");
+
+            _dbcon.LogConnection(req, res);
+
+            _conn_cnt = (_conn_cnt + 1) % 10;
+
+            if (_conn_cnt == 0 || res.Length > 0x1FFFFF)
+                GC.Collect();
+
+            return res;
+        }
+
+        private async Task<WWSResponse> ProcessRequestAsync(WWSRequest data)
         {
             EnqueueLog($"REQ: {data}");
 
@@ -685,6 +724,8 @@ return OUT.ToString();
 </html>
 ", _config.TextEncoding);
         }
+
+#endregion
     }
 
     internal struct EnumerationData
@@ -736,6 +777,10 @@ return OUT.ToString();
         /// The webserver enumerates local directories if no index file could be found and this option has been set to 'true' (default).
         /// </summary>
         public bool EnumDirectories { get; set; }
+        /// <summary>
+        /// The path (from the webserver's document root directory) pointing to the file containing all HTTP rewrite rules (usually '.htaccess')
+        /// </summary>
+        public string RewritePath { get; set; }
         /// <summary>
         /// The path (from the webserver's document root directory) pointing to the 403 error handling document (aka 'Forbidden').
         /// </summary>
@@ -820,6 +865,7 @@ return OUT.ToString();
                 _404Path = "/404.html",
                 _500Path = "/500.html",
                 LogPath = "wws.log",
+                RewritePath = "/.htaccess",
                 DatabasePath = "database/wws.mdf",
                 DatabaseSource = @"(LocalDB)\MSSQLLocalDB",
                 UseDatabase = true,

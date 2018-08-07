@@ -14,18 +14,77 @@ namespace WWS.Internals
     /// </summary>
     public static class HTTPRewriteEngine
     {
-        internal static string ProcessCondition(WWSRequest req, Uri uri, string cond)
-        {
-
-        }
+        internal static string ProcessCondition(WWSRequest req, DWSConfiguration config, Uri uri, string cond) =>
+            Regex.Replace(cond, @"\%\{(?<var>[a-z_]\w*)\}", (Match m) =>
+                          {
+                              switch (m.Groups["var"].ToString().ToLower())
+                              {
+                                  case "HTTP_USER_AGENT":
+                                      return req.UserAgent;
+                                  case "HTTP_COOKIE":
+                                      return req.CookieString;
+                                  case "HTTP_HOST":
+                                      return uri.Host;
+                                  case "REMOTE_ADDR":
+                                      return req.Sender.Address.ToString();
+                                  case "REMOTE_HOST":
+                                      return Dns.GetHostEntry(req.Sender.Address).HostName;
+                                  case "REMOTE_USER":
+                                  case "REMOTE_IDENT":
+                                      return req.Sender.ToString();
+                                  case "REQUEST_METHOD":
+                                      return req.HTTPRequestMethod;
+                                  case "SCRIPT_FILENAME":
+                                      return req.RequestedURLPath;
+                                  case "QUERY_STRING":
+                                      return uri.Query;
+                                  case "DOCUMENT_ROOT":
+                                      return config.Webroot.FullName;
+                                  case "SERVER_NAME":
+                                      return Dns.GetHostEntry(uri.Host).HostName;
+                                  case "SERVER_ADDR":
+                                      return Dns.GetHostEntry(uri.Host).AddressList[0].ToString();
+                                  case "SERVER_PORT":
+                                      return config.ListeningPort.ToString();
+                                  case "SERVER_PROTOCOL":
+                                      return config.ServerString;
+                                  case "SERVER_SOFTWARE":
+                                      return Environment.OSVersion.ToString();
+                                  case "TIME_YEAR":
+                                      return req.UTCRequestTime.Year.ToString();
+                                  case "TIME_MON":
+                                      return req.UTCRequestTime.Month.ToString();
+                                  case "TIME_DAY":
+                                      return req.UTCRequestTime.Day.ToString();
+                                  case "TIME_HOUR":
+                                      return req.UTCRequestTime.Hour.ToString();
+                                  case "TIME_MIN":
+                                      return req.UTCRequestTime.Minute.ToString();
+                                  case "TIME_SEC":
+                                      return req.UTCRequestTime.Second.ToString();
+                                  case "TIME_WDAY":
+                                      return req.UTCRequestTime.DayOfWeek.ToString();
+                                  case "TIME":
+                                      return WWSDatabaseConnector.SQLEscape(req.UTCRequestTime).Trim('\'');
+                                  case "API_VERSION":
+                                      return "WWS4.0";
+                                  case "REQUEST_URI":
+                                      return uri.ToString();
+                                  case "REQUEST_FILENAME":
+                                      return uri.AbsolutePath;
+                                  default:
+                                      return $"%{{{m.Groups["var"]}}}";
+                              }
+                          }, RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         /// <summary>
         /// Processes the given WWS4.0™ Request according to the given rewrite rules and returns the rewrite-engine's result
         /// </summary>
         /// <param name="req">Input URI</param>
+        /// <param name="config">The server's configuration</param>
         /// <param name="rules">Set of HTTP rewrite rules</param>
         /// <returns>Rewritten URI</returns>
-        public static HTTPRewriteResult ProcessURI(WWSRequest req, IEnumerable<HTTPRewriteRule> rules)
+        public static HTTPRewriteResult ProcessURI(WWSRequest req, DWSConfiguration config, IEnumerable<HTTPRewriteRule> rules)
         {
             Regex gen_regex(HTTPRewriteRule rule, out HTTPRewriteFlags[] flags)
             {
@@ -41,8 +100,8 @@ namespace WWS.Internals
 
             rules = (rules ?? new HTTPRewriteRule[0]).Distinct();
 
+            Dictionary<string, (string, TimeSpan)> d_coo = new Dictionary<string, (string, TimeSpan)>();
             Dictionary<string, string> d_env = new Dictionary<string, string>();
-            Dictionary<string, string> d_coo = new Dictionary<string, string>();
             Uri uri = req.RequestedURL;
             string server_s = null;
             bool previous = false;
@@ -61,7 +120,7 @@ begin:
                         if (!chained || previous)
                             if (rule.Conditional is string cond)
                             {
-                                cond = ProcessCondition(req, uri, cond);
+                                cond = ProcessCondition(req, config, uri, cond);
                                 previous = regex.IsMatch(cond);
                             }
                             else
@@ -75,7 +134,11 @@ begin:
 
                                 if (regex.IsMatch(qstr))
                                 {
-                                    string res = regex.Replace(qstr, rule.OutputExpression);
+                                    string res = rule.OutputExpression;
+
+                                    if (res != "-")
+                                        res = regex.Replace(qstr, rule.OutputExpression);
+
                                     bool has_q = res.Contains('?');
 
                                     if (flags.Contains(HTTPRewriteFlags.QSA))
@@ -103,7 +166,7 @@ begin:
                         {
                             foreach (HTTPRewriteFlags f in flags)
                                 if (f is HTTPRewriteFlags.Cookie fco)
-                                    d_coo[fco.Name] = fco.Value;
+                                    d_coo[fco.Name] = (fco.Value, fco.ExpirationDate);
                                 else if (f is HTTPRewriteFlags.EnvironmentVariable fe)
                                     d_env[fe.Name] = fe.Value;
                                 else if (f is HTTPRewriteFlags.ServerString fss)
@@ -145,9 +208,10 @@ begin:
         /// Processes the given WWS4.0™ Request according to the given rewrite rules and returns the rewrite-engine's result
         /// </summary>
         /// <param name="req">Input URI</param>
+        /// <param name="config">The server's configuration</param>
         /// <param name="rules">Set of HTTP rewrite rules</param>
         /// <returns>Rewritten URI</returns>
-        public static HTTPRewriteResult ProcessURI(WWSRequest req, params HTTPRewriteRule[] rules) => ProcessURI(req, rules as IEnumerable<HTTPRewriteRule>);
+        public static HTTPRewriteResult ProcessURI(WWSRequest req, DWSConfiguration config, params HTTPRewriteRule[] rules) => ProcessURI(req, config, rules as IEnumerable<HTTPRewriteRule>);
 
         /// <summary>
         /// Parses the given .htdocs/mod_rewrite contents and returns the parsed set of HTTP rewrite rules
@@ -207,7 +271,7 @@ begin:
         /// <summary>
         /// The cookies to be set
         /// </summary>
-        public IReadOnlyDictionary<string, string> Cookies { get; internal set; }
+        public IReadOnlyDictionary<string, (string Value, TimeSpan Expiration)> Cookies { get; internal set; }
         /// <summary>
         /// The [optional] server string
         /// </summary>
@@ -350,9 +414,15 @@ begin:
                         int cidx = arg.IndexOf(':');
 
                         if (cidx < 0)
-                            throw new InvalidOperationException("The rewrite-flag `CO` must contain a colon in its argument.");
+                            throw new InvalidOperationException("The rewrite-flag `CO` must contain at least one colon in its argument.");
 
-                        oflags |= HTTPRewriteFlags.CO(arg.Substring(0, cidx), arg.Substring(cidx + 1));
+                        string[] sargs = arg.Split(':');
+                        int expr = 3600 * 24;
+
+                        if (sargs.Length > 2 && uint.TryParse(sargs[2], out uint eui))
+                            expr = (int)eui;
+
+                        oflags |= HTTPRewriteFlags.CO(sargs[0], sargs[1], TimeSpan.FromSeconds(expr));
                     } break;
                     case "E":
                     {
@@ -453,8 +523,9 @@ begin:
         /// </summary>
         /// <param name="name">The cookie's name</param>
         /// <param name="value">The cookie's value</param>
+        /// <param name="exprdt">The cookie's expiration time span</param>
         /// <returns>HTTP rewrite flag</returns>
-        public static HTTPRewriteFlags CO(string name, string value) => new Cookie(name, value);
+        public static HTTPRewriteFlags CO(string name, string value, TimeSpan exprdt) => new Cookie(name, value, exprdt);
         /// <summary>
         /// Represents the <code>mod_rewrite</code>'s `E`-rule ("Set environment variable").
         /// </summary>
@@ -565,6 +636,10 @@ begin:
             /// The cookie's value
             /// </summary>
             public string Value { get; }
+            /// <summary>
+            /// The cookie's expiration time span
+            /// </summary>
+            public TimeSpan ExpirationDate { get; }
 
 
             /// <summary>
@@ -572,10 +647,12 @@ begin:
             /// </summary>
             /// <param name="name">The cookie's name</param>
             /// <param name="value">The cookie's value</param>
-            public Cookie(string name, string value)
+            /// <param name="exprdt">The cookie's expiration time span</param>
+            public Cookie(string name, string value, TimeSpan exprdt)
             {
                 Name = name;
                 Value = value;
+                ExpirationDate = exprdt;
             }
 
             /// <inheritdoc/>

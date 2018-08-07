@@ -31,6 +31,7 @@ namespace WWS
     public sealed class WonkyWebServer
         : IWebServer<IWSConfiguration>
     {
+        internal HTTPRewriteResult _ot_override;
         private IWSConfiguration _config;
         private HTTPServer _server;
 
@@ -157,7 +158,7 @@ namespace WWS
             res.Headers[HttpResponseHeader.Server] = config.ServerString;
             res.Headers[HttpResponseHeader.CacheControl] = "max-cache=" + config.CachingAge;
             res.Headers[HttpResponseHeader.Date] = $"{utcnow:ddd, dd MMM yyyy HH:mm:ss} UTC";
-            res.Headers[HttpResponseHeader.Allow] = "GET, HEAD, POST, PUT";
+            res.Headers[HttpResponseHeader.Allow] = "GET, HEAD, POST, PUT, DELETE";
 
             if (config.UseConnectionUpgrade)
             {
@@ -253,6 +254,15 @@ namespace WWS
     </body>
 </html>
 ", config.TextEncoding);
+                }
+
+            lock (_ot_override)
+                if (_ot_override != null)
+                {
+                    res.Headers[HttpResponseHeader.Server] = res.Headers[HttpResponseHeader.Server] ?? _ot_override.ServerString;
+                    res.ContentType = res.ContentType ?? _ot_override.MimeType;
+
+                    _ot_override = null;
                 }
 
             res.StatusCode = (int)rdat.StatusCode;
