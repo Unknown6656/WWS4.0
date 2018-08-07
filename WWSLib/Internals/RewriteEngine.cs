@@ -1,4 +1,6 @@
-﻿using System.Text.RegularExpressions;
+﻿// ReSharper disable PossibleMultipleEnumeration
+
+using System.Text.RegularExpressions;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
@@ -12,8 +14,140 @@ namespace WWS.Internals
     /// </summary>
     public static class HTTPRewriteEngine
     {
+        internal static string ProcessCondition(WWSRequest req, Uri uri, string cond)
+        {
 
+        }
 
+        /// <summary>
+        /// Processes the given WWS4.0™ Request according to the given rewrite rules and returns the rewrite-engine's result
+        /// </summary>
+        /// <param name="req">Input URI</param>
+        /// <param name="rules">Set of HTTP rewrite rules</param>
+        /// <returns>Rewritten URI</returns>
+        public static HTTPRewriteResult ProcessURI(WWSRequest req, IEnumerable<HTTPRewriteRule> rules)
+        {
+            Regex gen_regex(HTTPRewriteRule rule, out HTTPRewriteFlags[] flags)
+            {
+                flags = (rule.Flags ?? new HTTPRewriteFlags[0]).Distinct().ToArray();
+
+                RegexOptions ropt = RegexOptions.CultureInvariant | RegexOptions.Compiled;
+
+                if (flags.Contains(HTTPRewriteFlags.NC))
+                    ropt |= RegexOptions.IgnoreCase;
+                
+                return new Regex(rule.MatchRegex, ropt);
+            }
+
+            rules = (rules ?? new HTTPRewriteRule[0]).Distinct();
+
+            Dictionary<string, string> d_env = new Dictionary<string, string>();
+            Dictionary<string, string> d_coo = new Dictionary<string, string>();
+            Uri uri = req.RequestedURL;
+            string server_s = null;
+            bool previous = false;
+            bool chained = false;
+            string mime_t = null;
+            int nmaxcnt = 32000;
+            int ncount = 0;
+            int skip = 0;
+begin:
+            if (rules.Any() && nmaxcnt > ncount)
+                foreach (HTTPRewriteRule rule in rules)
+                    if (skip == 0)
+                    {
+                        Regex regex = gen_regex(rule, out HTTPRewriteFlags[] flags);
+
+                        if (!chained || previous)
+                            if (rule.Conditional is string cond)
+                            {
+                                cond = ProcessCondition(req, uri, cond);
+                                previous = regex.IsMatch(cond);
+                            }
+                            else
+                            {
+                                string qstr = flags.Contains(HTTPRewriteFlags.NQ) ? uri.AbsolutePath : uri.PathAndQuery;
+
+                                qstr = Uri.UnescapeDataString(qstr);
+
+                                if (qstr.StartsWith("/"))
+                                    qstr = qstr.Substring(1);
+
+                                if (regex.IsMatch(qstr))
+                                {
+                                    string res = regex.Replace(qstr, rule.OutputExpression);
+                                    bool has_q = res.Contains('?');
+
+                                    if (flags.Contains(HTTPRewriteFlags.QSA))
+                                        res += has_q ? '&' + uri.Query.Substring(1) : uri.Query;
+
+                                    if (!Uri.IsWellFormedUriString(res, UriKind.Absolute))
+                                        res = $"{uri.Scheme}://{uri.Authority}/{(res.StartsWith("/") ? res.Substring(1) : res)}";
+
+                                    if (uri.Fragment.Length > 0)
+                                        res += uri.Fragment;
+
+                                    if (!flags.Contains(HTTPRewriteFlags.BNP))
+                                        res = res.Replace(' ', '+');
+
+                                    uri = new Uri(res);
+                                    previous = true;
+                                }
+                                else
+                                    previous = false;
+                            }
+
+                        chained = flags.Contains(HTTPRewriteFlags.C);
+
+                        if (previous)
+                        {
+                            foreach (HTTPRewriteFlags f in flags)
+                                if (f is HTTPRewriteFlags.Cookie fco)
+                                    d_coo[fco.Name] = fco.Value;
+                                else if (f is HTTPRewriteFlags.EnvironmentVariable fe)
+                                    d_env[fe.Name] = fe.Value;
+                                else if (f is HTTPRewriteFlags.ServerString fss)
+                                    server_s = fss.String;
+                                else if (f is HTTPRewriteFlags.MimeType ft)
+                                    mime_t = ft.Type;
+                                else if (f is HTTPRewriteFlags.Skip fs && fs.Count > 0)
+                                    skip = fs.Count;
+                                else if (f is HTTPRewriteFlags.Next fn)
+                                {
+                                    nmaxcnt = Math.Max(nmaxcnt, fn.IterationCount);
+
+                                    ++ncount;
+
+                                    goto begin;
+                                }
+
+                            if (flags.Contains(HTTPRewriteFlags.L))
+                                break;
+                        }
+                    }
+                    else
+                    {
+                        --skip;
+                    }
+
+            return new HTTPRewriteResult
+            {
+                MimeType = mime_t,
+                ServerString = server_s,
+                Cookies = d_coo,
+                EnvironmentVariables = d_env,
+                OriginalUri = req.RequestedURL,
+                RewrittenUri = uri
+            };
+        }
+
+        /// <summary>
+        /// Processes the given WWS4.0™ Request according to the given rewrite rules and returns the rewrite-engine's result
+        /// </summary>
+        /// <param name="req">Input URI</param>
+        /// <param name="rules">Set of HTTP rewrite rules</param>
+        /// <returns>Rewritten URI</returns>
+        public static HTTPRewriteResult ProcessURI(WWSRequest req, params HTTPRewriteRule[] rules) => ProcessURI(req, rules as IEnumerable<HTTPRewriteRule>);
 
         /// <summary>
         /// Parses the given .htdocs/mod_rewrite contents and returns the parsed set of HTTP rewrite rules
@@ -58,6 +192,42 @@ namespace WWS.Internals
                     rls.Add(HTTPRewriteRule.Parse(l));
 
             return rls.Distinct().ToArray();
+        }
+    }
+
+    /// <summary>
+    /// Represents the result of an HTTP URI rewriting process
+    /// </summary>
+    public sealed class HTTPRewriteResult
+    {
+        /// <summary>
+        /// The environment variables to be set
+        /// </summary>
+        public IReadOnlyDictionary<string, string> EnvironmentVariables { get; internal set; }
+        /// <summary>
+        /// The cookies to be set
+        /// </summary>
+        public IReadOnlyDictionary<string, string> Cookies { get; internal set; }
+        /// <summary>
+        /// The [optional] server string
+        /// </summary>
+        public string ServerString { get; internal set; }
+        /// <summary>
+        /// The rewritten URI
+        /// </summary>
+        public Uri RewrittenUri { get; internal set; }
+        /// <summary>
+        /// The original URI
+        /// </summary>
+        public Uri OriginalUri { get; internal set; }
+        /// <summary>
+        /// The [optional] mime type
+        /// </summary>
+        public string MimeType { get; internal set; }
+
+
+        internal HTTPRewriteResult()
+        {       
         }
     }
 
@@ -176,9 +346,14 @@ namespace WWS.Internals
 
                         break;
                     case "CO":
-                        oflags |= HTTPRewriteFlags.CO(arg);
+                    {
+                        int cidx = arg.IndexOf(':');
 
-                        break;
+                        if (cidx < 0)
+                            throw new InvalidOperationException("The rewrite-flag `CO` must contain a colon in its argument.");
+
+                        oflags |= HTTPRewriteFlags.CO(arg.Substring(0, cidx), arg.Substring(cidx + 1));
+                    } break;
                     case "E":
                     {
                         int cidx = arg.IndexOf(':');
@@ -197,11 +372,14 @@ namespace WWS.Internals
 
                         break;
                     case "L":
+                    case "END":
                         oflags |= HTTPRewriteFlags.L;
 
                         break;
                     case "N":
-                        oflags |= HTTPRewriteFlags.N;
+                        oflags |= int.TryParse(arg, out int i) ? HTTPRewriteFlags.N(i)
+                            : arg.Length == 0 ? HTTPRewriteFlags.N()
+                            : throw new InvalidOperationException($"Invalid value '{arg}' for the rewrite flag `N`.");
 
                         break;
                     case "NC":
@@ -213,18 +391,16 @@ namespace WWS.Internals
 
                         break;
                     case "NQ":
+                    case "QSD":
                         oflags |= HTTPRewriteFlags.NQ;
 
                         break;
                     case "R":
-                        if (int.TryParse(arg, out int i))
-                        {
-                            oflags |= HTTPRewriteFlags.R((HttpStatusCode)i);
+                        oflags |= int.TryParse(arg, out i) ? HTTPRewriteFlags.R((HttpStatusCode)i)
+                                : arg.Length == 0          ? HTTPRewriteFlags.R()
+                                : throw new InvalidOperationException($"Invalid value '{arg}' for the rewrite flag `R`.");
 
-                            break;
-                        }
-                        else
-                            throw new InvalidOperationException($"Invalid value '{arg}' for the rewrite flag `R`.");
+                        break;
                     case "QSA":
                         oflags |= HTTPRewriteFlags.QSA;
 
@@ -265,15 +441,20 @@ namespace WWS.Internals
 
 
         /// <summary>
+        /// Represents the <code>mod_rewrite</code>'s `BNP`-rule ("Backreference: no plus").
+        /// </summary>
+        public static HTTPRewriteFlags BNP => new Chained();
+        /// <summary>
         /// Represents the <code>mod_rewrite</code>'s `C`-rule ("Chained").
         /// </summary>
         public static HTTPRewriteFlags C => new Chained();
         /// <summary>
         /// Represents the <code>mod_rewrite</code>'s `CO`-rule ("Cookie").
         /// </summary>
-        /// <param name="str">Cookie string</param>
+        /// <param name="name">The cookie's name</param>
+        /// <param name="value">The cookie's value</param>
         /// <returns>HTTP rewrite flag</returns>
-        public static HTTPRewriteFlags CO(string str) => new Cookie(str);
+        public static HTTPRewriteFlags CO(string name, string value) => new Cookie(name, value);
         /// <summary>
         /// Represents the <code>mod_rewrite</code>'s `E`-rule ("Set environment variable").
         /// </summary>
@@ -296,7 +477,8 @@ namespace WWS.Internals
         /// <summary>
         /// Represents the <code>mod_rewrite</code>'s `N`-rule ("Next rule").
         /// </summary>
-        public static HTTPRewriteFlags N => new Next();
+        /// <param name="count">The number of maximum iterations</param>
+        public static HTTPRewriteFlags N(int count = 32000) => new Next(count);
         /// <summary>
         /// Represents the <code>mod_rewrite</code>'s `NC`-rule ("Ignore case").
         /// </summary>
@@ -355,6 +537,14 @@ namespace WWS.Internals
 
 #pragma warning disable CS0659
 
+        /// <inheritdoc cref="HTTPRewriteFlags.BNP"/>
+        public sealed class DontUsePlus
+            : HTTPRewriteFlags
+        {
+            /// <inheritdoc/>
+            public override bool Equals(object obj) => obj is DontUsePlus;
+        }
+
         /// <inheritdoc cref="HTTPRewriteFlags.C"/>
         public sealed class Chained
             : HTTPRewriteFlags
@@ -368,19 +558,28 @@ namespace WWS.Internals
             : HTTPRewriteFlags
         {
             /// <summary>
-            /// The cookie string
+            /// The cookie's name
             /// </summary>
-            public string CookieString { get; }
+            public string Name { get; }
+            /// <summary>
+            /// The cookie's value
+            /// </summary>
+            public string Value { get; }
 
 
             /// <summary>
             /// Creates a new instance
             /// </summary>
-            /// <param name="str">The cookie string</param>
-            public Cookie(string str) => CookieString = str;
+            /// <param name="name">The cookie's name</param>
+            /// <param name="value">The cookie's value</param>
+            public Cookie(string name, string value)
+            {
+                Name = name;
+                Value = value;
+            }
 
             /// <inheritdoc/>
-            public override bool Equals(object obj) => obj is Cookie c && c.CookieString == CookieString;
+            public override bool Equals(object obj) => obj is Cookie c && c.Name == Name && c.Value == Value;
         }
 
         /// <inheritdoc cref="HTTPRewriteFlags.E"/>
@@ -424,6 +623,18 @@ namespace WWS.Internals
         public sealed class Next
             : HTTPRewriteFlags
         {
+            /// <summary>
+            /// The maximum iteration count
+            /// </summary>
+            public int IterationCount { get; }
+
+
+            /// <summary>
+            /// Creates a new instance
+            /// </summary>
+            /// <param name="iterationCount">The maximum iteration count</param>
+            public Next(int iterationCount) => IterationCount = iterationCount;
+
             /// <inheritdoc/>
             public override bool Equals(object obj) => obj is Next;
         }

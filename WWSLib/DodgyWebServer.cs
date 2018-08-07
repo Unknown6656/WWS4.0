@@ -1,4 +1,6 @@
-﻿using System.Text.RegularExpressions;
+﻿// ReSharper disable PossibleMultipleEnumeration
+
+using System.Text.RegularExpressions;
 using System.Security.Cryptography;
 using System.Collections.Generic;
 using System.Threading.Tasks;
