@@ -1,6 +1,5 @@
-﻿// ReSharper disable PossibleMultipleEnumeration
-
-using System.Text.RegularExpressions;
+﻿using System.Text.RegularExpressions;
+using System.Collections.ObjectModel;
 using System.Security.Cryptography;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -26,25 +25,34 @@ namespace WWS
     /// <summary>
     /// Represents a DodgyWebServer™ for file-based HTTP/HTTPS request processing including in-file scripting.
     /// </summary>
-    /// <inheritdoc />
+    /// <inheritdoc cref="WebServer{T}"/>
     public sealed class DodgyWebServer
-        : IWebServer<DWSConfiguration>
+        : WebServer<DodgyWebServer>
+        , IConfigurableWebServer<DWSConfiguration>
     {
         private static readonly Regex _ws_regex = new Regex(@"<\?(?<print>\=)?\s*(?<expr>.*?)\s*\?>", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
         private readonly Dictionary<string, ScriptRunner<string>> _precompiled = new Dictionary<string, ScriptRunner<string>>();
         private readonly Queue<string> _log_queue = new Queue<string>();
         private readonly WonkyWebServer _wws;
 
-        private volatile int _conn_cnt = 0;
+        private volatile int _conn_cnt;
         private WWSDatabaseConnector _dbcon;
         private DWSConfiguration _config;
 
 
         /// <inheritdoc/>
-        public bool IsRunning => _wws.IsRunning;
-
+        public override bool IsRunning => _wws.IsRunning;
         /// <inheritdoc/>
         public DWSConfiguration Configuration => _config;
+
+        /// <summary>
+        /// Raised when a HTTP(S) request has been recieved.
+        /// </summary>
+        public event ServerEvent<DodgyWebServer, WWSRequest> OnRequestRecieved;
+        /// <summary>
+        /// Raised when a HTTP(S) request has been processed by the webserver.
+        /// </summary>
+        public event ServerEvent<DodgyWebServer, WWSResponse> OnRequestProcessed;
 
 
         /// <summary>
@@ -79,9 +87,11 @@ namespace WWS
         /// </summary>
         ~DodgyWebServer() => Stop();
 
+#pragma warning disable CS0809
+
         /// <inheritdoc/>
         [Obsolete("Use `WWS.DodgyWebServer.StartAsync : void -> Task` instead.")]
-        public void Start()
+        public override void Start()
         {
             using (Task task = StartAsync())
             {
@@ -94,7 +104,9 @@ namespace WWS
                     Thread.Sleep(0);
             }
         }
-        
+
+#pragma warning restore CS0809
+
         /// <summary>
         /// Starts the webserver
         /// </summary>
@@ -116,7 +128,7 @@ namespace WWS
         }
 
         /// <inheritdoc/>
-        public void Stop()
+        public override void Stop()
         {
             EnqueueLog("Server stopped");
 
@@ -148,7 +160,7 @@ namespace WWS
             {
                 try
                 {
-                    _ = new Regex(reg);
+                    Regex _ = new Regex(reg);
                 }
                 catch
                 {
@@ -229,7 +241,7 @@ namespace WWS
             lock (_log_queue)
                 _log_queue.Enqueue($"[UTC: {DateTime.UtcNow:ddd, yyyy-MMM-dd HH:mm:ss.ffffff}]  {msg.Trim()}");
         }
-#if DEBUG
+
         private async Task<WWSResponse> DebugSQL(WWSRequest req)
         {
             try
@@ -239,10 +251,32 @@ namespace WWS
 
                 return (HttpStatusCode.OK, $@"
 <html>
-    <body style=""font-family: sans-serif"">
+    <style>
+        body {{
+            font-family: monospace;
+            font-size: 12pt;
+        }}
+
+        td, th {{
+            border: 1px solid #888;
+            white-space: nowrap;
+            padding: 1px 4px;
+        }}
+
+        hr {{
+            width: 100%;
+        }}
+    
+        table {{
+            border-collapse: collapse;
+            white-space: nowrap;
+            min-width: 100%;
+        }}
+    </style>
+    <body>
         {res.Length} entries:
         <hr/>
-        <table wdith=""100%"">
+        <table>
             <tr>{string.Concat(res.FirstOrDefault()?.Keys.Select(k => $"<th>{k}</th>") ?? new string[0])}</tr>
             {string.Concat(res.Select(row => $"<tr>{string.Concat(row.Keys.Select(k => $"<td>{row[k]}</td>"))}</tr>"))}
         </table>
@@ -255,51 +289,75 @@ namespace WWS
                 return await Handle500Async(req, ex);
             }
         }
-#endif
+
         private HTTPRewriteResult RewriteRequest(WWSRequest req)
         {
             string p_rwr = Configuration.RewritePath ?? "/.htaccess";
+            HTTPRewriteRule[] rules = Configuration.AdditionalRewriteRules;
 
             if (p_rwr.Replace('\\', '/').StartsWith("/"))
                 p_rwr = p_rwr.Substring(1);
 
-            FileInfo nfo = new FileInfo(_config.Webroot.FullName + '/' + p_rwr);
-            HTTPRewriteRule[] rules = null;
-
-            if (!nfo.Exists)
+            try
             {
-                string htaccess = File.ReadAllText(nfo.FullName);
+                FileInfo nfo = new FileInfo(_config.Webroot.FullName + '/' + p_rwr);
 
-                rules = HTTPRewriteEngine.ParseRules(htaccess);
+                if (nfo.Exists)
+                {
+                    string htaccess = File.ReadAllText(nfo.FullName);
+
+                    rules = HTTPRewriteEngine.ParseRules(htaccess).Concat(rules).ToArray();
+                }
             }
+            catch { /* ignored */ }
 
             return HTTPRewriteEngine.ProcessURI(req, Configuration, rules);
         }
 
-        private async Task<WWSResponse> OnIncomingRequestAsync(WonkyWebServer _, WWSRequest req)
+        private async Task<WWSResponse> OnIncomingRequestAsync(WonkyWebServer srv, WWSRequest req)
         {
             HTTPRewriteResult rwres = RewriteRequest(req);
 
-            if (rwres?.Cookies != null)
-                foreach (KeyValuePair<string, string> kvp in rwres.EnvironmentVariables)
-                    Environment.SetEnvironmentVariable(kvp.Key, kvp.Value, EnvironmentVariableTarget.Process);
+            if (rwres != null)
+                if (!rwres.RewrittenUri?.Equals(rwres.OriginalUri) ?? rwres.OriginalUri != null)
+                {
+                    Uri r_uri = rwres.RewrittenUri ?? rwres.OriginalUri;
 
-            if (rwres?.Cookies != null)
-                foreach (KeyValuePair<string, (string, TimeSpan)> cookie in rwres.Cookies)
-                    req.Cookies[cookie.Key] = (cookie.Value.Item1, req.UTCRequestTime.Add(cookie.Value.Item2));
+                    req.RequestedURL = r_uri;
+                    req.GETVariables = new ReadOnlyDictionary<string, string>(Util.DecomposeQueryString(r_uri.Query));
+                    req.ServerVariables["REQUEST_URI"] = r_uri.ToString();
+                    req.ServerVariables["REQUEST_PATH"] = r_uri.AbsolutePath;
+                    req.ServerVariables["QUERY_STRING"] = r_uri.Query;
 
+                    if (rwres.Cookies != null)
+                        foreach (KeyValuePair<string, string> kvp in rwres.EnvironmentVariables)
+                            Environment.SetEnvironmentVariable(kvp.Key, kvp.Value, EnvironmentVariableTarget.Process);
 
-            // TODO : do something with the rewrite result
+                    if (rwres.Cookies != null)
+                        foreach (KeyValuePair<string, (string, TimeSpan)> cookie in rwres.Cookies)
+                            req.Cookies[cookie.Key] = (cookie.Value.Item1, req.UTCRequestTime.Add(cookie.Value.Item2));
 
+                    lock (srv._ot_mutex)
+                        srv._ot_override = rwres;
+                }
 
-            lock (_._ot_override)
-                _._ot_override = rwres;
+            OnRequestRecieved?.Invoke(this, req);
 
             WWSResponse res = await ProcessRequestAsync(req);
-#if DEBUG
-            if (req.RequestedURLPath.ToLower() == "/~sql")
-                return await DebugSQL(req);
-#endif
+
+            if (Configuration.AllowSQLDebugging)
+            {
+                if (req.RequestedURLPath.ToLower() == "/~sql")
+                    res = await DebugSQL(req);
+
+                if (req.GETVariables.ContainsKey("pl"))
+                {
+                    OnRequestProcessed?.Invoke(this, res);
+
+                    return res;
+                }
+            }
+
             EnqueueLog($"RSP: {req} {res.Length} bytes ({Util.BytesToString(res.Length)})");
 
             _dbcon.LogConnection(req, res);
@@ -309,6 +367,8 @@ namespace WWS
             if (_conn_cnt == 0 || res.Length > 0x1FFFFF)
                 GC.Collect();
 
+            OnRequestProcessed?.Invoke(this, res);
+
             return res;
         }
 
@@ -317,13 +377,18 @@ namespace WWS
             EnqueueLog($"REQ: {data}");
 
             string rpath = Configuration.Webroot.FullName + data.RequestedURLPath;
-            DirectoryInfo rdir = new DirectoryInfo(rpath);
 
-            if (rdir.Exists)
-                if (rdir.EnumerateFiles().FirstOrDefault(fi => Regex.IsMatch(fi.Name, Configuration.IndexRegex, RegexOptions.Compiled | RegexOptions.IgnoreCase)) is FileInfo _fi)
-                    rpath = _fi.FullName;
-                else if(Configuration.EnumDirectories)
-                    return EnumDirectory(data, rdir);
+            try
+            {
+                DirectoryInfo rdir = new DirectoryInfo(rpath);
+
+                if (rdir.Exists)
+                    if (rdir.EnumerateFiles().FirstOrDefault(fi => Regex.IsMatch(fi.Name, Configuration.IndexRegex, RegexOptions.Compiled | RegexOptions.IgnoreCase)) is FileInfo _fi)
+                        rpath = _fi.FullName;
+                    else if (Configuration.EnumDirectories)
+                        return EnumDirectory(data, rdir);
+            }
+            catch { /* ignored */ }
 
             try
             {
@@ -454,8 +519,12 @@ return OUT.ToString();
 
                 ServerHost host = new ServerHost
                 {
+                    _DATABASE = _dbcon,
                     _GET = create_indexer(req.GETVariables),
                     _POST = create_indexer(req.POSTVariables),
+                    _GETVARS = req.GETVariables.Keys.ToArray(),
+                    _POSTVARS = req.GETVariables.Keys.ToArray(),
+                    _SERVERVARS = req.ServerVariables.Keys.ToArray(),
                     _SERVER = create_indexer(req.ServerVariables),
                     _COOKIES = new Indexer<string, (string Value, DateTime Expiration)>(
                         c => req.Cookies.TryGetValue(c, out var v) ? v : ("", DateTime.MinValue),
@@ -743,7 +812,7 @@ return OUT.ToString();
     /// <summary>
     /// Represents a server configuration for a DodgyWebServer™
     /// </summary>
-    /// <inheritdoc />
+    /// <inheritdoc cref="IWSConfiguration"/>
     public struct DWSConfiguration
         : IWSConfiguration
     {
@@ -821,6 +890,15 @@ return OUT.ToString();
         /// Determines whether the T-SQL database should be used in the background
         /// </summary>
         public bool UseDatabase { set; get; }
+        /// <summary>
+        /// If the property is set to `true`, T-SQL commands can be executed by calling the website `http(s)://......:.../~sql?q=....` where the command is passed directly as the GET-parameter `q`.
+        /// The optional GET-parameter `pl` prevents the T-SQL command from being logged.
+        /// </summary>
+        public bool AllowSQLDebugging { set; get; }
+        /// <summary>
+        /// Specifies additional HTTP URL rewrite rules which shall be applied on all incoming requests
+        /// </summary>
+        public HTTPRewriteRule[] AdditionalRewriteRules { set; get; }
 
         /// <summary>
         /// The default HTTP configuration
@@ -868,9 +946,11 @@ return OUT.ToString();
                 RewritePath = "/.htaccess",
                 DatabasePath = "database/wws.mdf",
                 DatabaseSource = @"(LocalDB)\MSSQLLocalDB",
+                AllowSQLDebugging = false,
                 UseDatabase = true,
                 UseLog = true,
                 Webroot = new DirectoryInfo("./www"),
+                AdditionalRewriteRules = new HTTPRewriteRule[0],
             };
         }
     }
@@ -881,16 +961,52 @@ return OUT.ToString();
     [DebuggerNonUserCode, DebuggerStepThrough]
     public sealed class ServerHost
     {
+        /// <summary>
+        /// The webserver's exception (only on 500-Errors)
+        /// </summary>
         [DebuggerBrowsable(DebuggerBrowsableState.Never), DebuggerHidden]
         public Exception _EXCEPTION { internal set; get; }
+        /// <summary>
+        /// The request's GET variables
+        /// </summary>
         [DebuggerBrowsable(DebuggerBrowsableState.Never), DebuggerHidden]
         public ReadOnlyIndexer<string, string> _GET { internal set; get; }
+        /// <summary>
+        /// The request's POST variables
+        /// </summary>
         [DebuggerBrowsable(DebuggerBrowsableState.Never), DebuggerHidden]
         public ReadOnlyIndexer<string, string> _POST { internal set; get; }
+        /// <summary>
+        /// The webserver's environment variables
+        /// </summary>
         [DebuggerBrowsable(DebuggerBrowsableState.Never), DebuggerHidden]
         public ReadOnlyIndexer<string, string> _SERVER { internal set; get; }
+        /// <summary>
+        /// The request's GET variable names
+        /// </summary>
+        [DebuggerBrowsable(DebuggerBrowsableState.Never), DebuggerHidden]
+        public string[] _GETVARS { internal set; get; }
+        /// <summary>
+        /// The request's POST variable names
+        /// </summary>
+        [DebuggerBrowsable(DebuggerBrowsableState.Never), DebuggerHidden]
+        public string[] _POSTVARS { internal set; get; }
+        /// <summary>
+        /// The webserver's environment variable names
+        /// </summary>
+        [DebuggerBrowsable(DebuggerBrowsableState.Never), DebuggerHidden]
+        public string[] _SERVERVARS { internal set; get; }
+        /// <summary>
+        /// The Connection's cookies
+        /// </summary>
         [DebuggerBrowsable(DebuggerBrowsableState.Never), DebuggerHidden]
         public Indexer<string, (string Value, DateTime Expiration)> _COOKIES { internal set; get; }
+        /// <summary>
+        /// The webserver's T-SQL database connector
+        /// </summary>
+        [DebuggerBrowsable(DebuggerBrowsableState.Never), DebuggerHidden]
+        public WWSDatabaseConnector _DATABASE { internal set; get; }
+
 
         internal ServerHost()
         {

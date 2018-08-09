@@ -1,4 +1,6 @@
-﻿using System.Text;
+﻿using System.Collections.ObjectModel;
+using System.Collections.Generic;
+using System.Text;
 using System;
 
 
@@ -13,31 +15,80 @@ namespace WWS
     /// <returns>Return value reference</returns>
     public delegate ref V RefFunc<in I, V>(I arg);
 
-
     /// <summary>
-    /// Represents a general webserver
+    /// Represents a WWS4.0™ compatible webserver event
     /// </summary>
     /// <typeparam name="T">Generic webserver type</typeparam>
-    public interface IWebServer<out T>
-        where T : IWSConfiguration
+    /// <param name="server">The server raising the event</param>
+    public delegate void ServerEvent<in T>(T server)
+        where T : WebServer<T>;
+
+    /// <summary>
+    /// Represents a WWS4.0™ compatible webserver event
+    /// </summary>
+    /// <typeparam name="T">Generic webserver type</typeparam>
+    /// <typeparam name="A">Generic argument type</typeparam>
+    /// <param name="server">The server raising the event</param>
+    /// <param name="argument">The event argument</param>
+    public delegate void ServerEvent<in T, in A>(T server, A argument)
+        where T : WebServer<T>;
+
+
+    /// <summary>
+    /// Represents an abstract webserver
+    /// </summary>
+    /// <typeparam name="T">Generic webserver type</typeparam>
+    public abstract class WebServer<T>
+        where T : WebServer<T>
     {
+        /// <summary>
+        /// Raised before the server is being stopped.
+        /// </summary>
+        public virtual event ServerEvent<T> OnStopping;
+        /// <summary>
+        /// Raised after the server has stopped.
+        /// </summary>
+        public virtual event ServerEvent<T> OnStopped;
+        /// <summary>
+        /// Raised before the server is being started.
+        /// </summary>
+        public virtual event ServerEvent<T> OnStarting;
+        /// <summary>
+        /// Raised after the server has started.
+        /// </summary>
+        public virtual event ServerEvent<T> OnStarted;
+
         /// <summary>
         /// Inidicates, whether the server is running
         /// </summary>
-        bool IsRunning { get; }
-        /// <summary>
-        /// The webserver's configuration
-        /// </summary>
-        T Configuration { get; }
+        public virtual bool IsRunning { get; protected set; }
 
         /// <summary>
         /// Starts the server
         /// </summary>
-        void Start();
+        public abstract void Start();
         /// <summary>
         /// Stops the server
         /// </summary>
-        void Stop();
+        public abstract void Stop();
+
+        private protected void __OnStopping(T server) => OnStopping?.Invoke(server);
+        private protected void __OnStopped(T server) => OnStopped?.Invoke(server);
+        private protected void __OnStarting(T server) => OnStarting?.Invoke(server);
+        private protected void __OnStarted(T server) => OnStarted?.Invoke(server);
+    }
+
+    /// <summary>
+    /// Represents a general webserver with a configuration
+    /// </summary>
+    /// <typeparam name="S">Generic webserver configuration data type</typeparam>
+    public interface IConfigurableWebServer<out S>
+        where S : IWSConfiguration
+    {
+        /// <summary>
+        /// The webserver's configuration
+        /// </summary>
+        S Configuration { get; }
     }
 
     /// <summary>
@@ -50,7 +101,7 @@ namespace WWS
         /// </summary>
         WWSHTTPSConfiguration? HTTPS { set; get; }
         /// <summary>
-        /// Use the HTTP/HTTPS header value 'upgrade' instead of 'keep-alive'
+        /// Use the HTTP/HTTPS header value 'upgrade' to indicate a possible HTTP/1.1 -> HTTP/2 upgrade
         /// </summary>
         bool UseConnectionUpgrade { set; get; }
         /// <summary>
@@ -230,5 +281,57 @@ namespace WWS
             : base(msg)
         {
         }
+    }
+
+    /// <summary>
+    /// Represents a generic dictionary which has a default value for elements which could not be found
+    /// </summary>
+    /// <typeparam name="K">Generic key type</typeparam>
+    /// <typeparam name="V">Generic value type</typeparam>
+    public sealed class DefaultDictionary<K, V>
+        : Dictionary<K, V>
+    {
+        /// <summary>
+        /// Default value
+        /// </summary>
+        public V DefaultValue { get; }
+
+        /// <inheritdoc cref="Dictionary{K,V}.this"/>
+        public new V this[K index]
+        {
+            get => TryGetValue(index, out V v) ? v : DefaultValue;
+            set => base[index] = value;
+        }
+
+        /// <summary>
+        /// Creates a new dictionary with the given default value
+        /// </summary>
+        /// <param name="default">Default value</param>
+        public DefaultDictionary(V @default) => DefaultValue = @default;
+    }
+
+    /// <summary>
+    /// Represents a generic read-only dictionary which has a default value for elements which could not be found
+    /// </summary>
+    /// <typeparam name="K">Generic key type</typeparam>
+    /// <typeparam name="V">Generic value type</typeparam>
+    public sealed class DefaultReadOnlyDictionary<K, V>
+        : ReadOnlyDictionary<K, V>
+    {
+        /// <summary>
+        /// Default value
+        /// </summary>
+        public V DefaultValue { get; }
+
+        /// <inheritdoc cref="ReadOnlyDictionary{K,V}.this"/>
+        public new V this[K index] => TryGetValue(index, out V v) ? v : DefaultValue;
+
+        /// <summary>
+        /// Creates a new read-only dictionary with the given default value
+        /// </summary>
+        /// <param name="dic">Base dictionary</param>
+        /// <param name="default">Default value</param>
+        public DefaultReadOnlyDictionary(IDictionary<K, V> dic, V @default)
+            : base(dic) => DefaultValue = @default;
     }
 }

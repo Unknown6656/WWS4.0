@@ -1,7 +1,6 @@
 ﻿using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.Data.SqlClient;
-using System.Threading;
 using System.Dynamic;
 using System.Net;
 using System.IO;
@@ -13,6 +12,7 @@ using WWS.Properties;
 namespace WWS.Internals
 {
     using dic_sd = IDictionary<string, dynamic>;
+
 
     /// <summary>
     /// Represents a connector for an T-SQL database for a WWS4.0™-compatible webserver
@@ -42,6 +42,9 @@ namespace WWS.Internals
         /// </summary>
         public bool IsConnected => _connection != null;
 
+        /// <summary>
+        /// The event which will be raised if a T-SQL command has been issued (directly or indirectly)
+        /// </summary>
         public event EventHandler<string> OnSQLCommandIssued;
 
 
@@ -80,6 +83,8 @@ namespace WWS.Internals
             };
 
             await _connection.OpenAsync();
+
+            PublicUtils.RunAsync(async () => await LoggerLoop());
 
             _running = true;
         }
@@ -136,6 +141,13 @@ Filename= '{DatabasePath}'
         /// </summary>
         /// <param name="sql">T-SQL command string</param>
         /// <returns>Command or query result</returns>
+        public dic_sd[] Execute(string sql) => PublicUtils.RunSync(async () => await ExecuteAsync(sql));
+
+        /// <summary>
+        /// Executes the given T-SQL command and returns its results as row-wise enumeration
+        /// </summary>
+        /// <param name="sql">T-SQL command string</param>
+        /// <returns>Command or query result</returns>
         public async Task<dic_sd[]> ExecuteAsync(string sql)
         {
             if (string.IsNullOrWhiteSpace(sql))
@@ -163,6 +175,11 @@ Filename= '{DatabasePath}'
             return rows.ToArray();
         }
 
+        /// <summary>
+        /// Logs the given application to the internal database
+        /// </summary>
+        /// <param name="req">WWS4.0™ connection request</param>
+        /// <param name="resp">WWS4.0™ connection response</param>
         public void LogConnection(WWSRequest req, WWSResponse resp)
         {
             lock(_dbtasks)
@@ -193,15 +210,17 @@ IF @host_id IS NULL
 DECLARE @conn_id BIGINT = (SELECT ISNULL(MAX([ID]) + 1, 0)
 						   FROM {DB_CONN});
 
-INSERT INTO {DB_CONN} (ID, HostID, TimestampUTC, RequestedURI, Cookies, HTTPMethod, StatusCode, RemotePort)
+INSERT INTO {DB_CONN} (ID, HostID, TimestampUTC, RequestedURI, OriginalURI, Cookies, HTTPMethod, StatusCode, ReturnLength, RemotePort)
 VALUES (
 	@conn_id,
 	@host_id,
 	{SQLEscape(req.UTCRequestTime)},
 	'{SQLEscape(req.RequestedURL.ToString())}',
+	'{SQLEscape(req.OriginalURL.ToString())}',
     '{req.CookieString}',
 	'{SQLEscape(req.HTTPRequestMethod)}',
     {(int)resp.StatusCode},
+    {resp.Length},
     {req.Sender.Port}
 );
 
@@ -228,9 +247,9 @@ VALUES (
     '{dat.RegionCode}',
     '{SQLEscape(dat.Region)}',
     '{SQLEscape(dat.City)}',
-    '{dat.ZipCode}',
-    '{dat.Latitude}',
-    '{dat.Longitude}',
+    {dat.ZipCode},
+    {dat.Latitude:0.0},
+    {dat.Longitude:0.0},
     '{SQLEscape(dat.Timezone)}',
     '{SQLEscape(dat.Alias)}',
     '{SQLEscape(host.HostName)}',
@@ -240,6 +259,12 @@ VALUES (
                 }
         }
 
+        /// <summary>
+        /// Returns the next free ID for the given table and column name
+        /// </summary>
+        /// <param name="db">Table name</param>
+        /// <param name="idcol">Column name (default: '[ID]')</param>
+        /// <returns>Next free ID value (not guaranteed to be thread-safe after return)</returns>
         public async Task<long> GetNextIDAsync(string db, string idcol = "[ID]")
         {
             dic_sd[] res = await ExecuteAsync($"SELECT ISNULL(MAX({idcol}) + 1, 0) i FROM {db}");
@@ -247,12 +272,32 @@ VALUES (
             return res.Length > 0 ? (long)res[0]["i"] : 0;
         }
 
+        /// <summary>
+        /// Escapes and quotes the given <see cref="DateTime"/>-structure in a T-SQL compatible format
+        /// </summary>
+        /// <param name="dt">Date/Time information</param>
+        /// <returns>T-SQL string</returns>
         public static string SQLEscape(DateTime dt) => $"'{dt:yyyy-MM-dd HH:mm:ss.fff}'";
 
+        /// <summary>
+        /// Converts a T-SQL compatible Date/Time representation and parses a <see cref="DateTime"/>-structure back from it
+        /// </summary>
+        /// <param name="res">T-SQL compatible string</param>
+        /// <returns><see cref="DateTime"/>-instance</returns>
         public static DateTime FromSQLResult(string res) => DateTime.ParseExact(res, "yyyy-MM-dd HH:mm:ss.fff", null);
 
+        /// <summary>
+        /// Escapes the given string into a T-SQL comaptible format (but does _not_ surround it with quotes)
+        /// </summary>
+        /// <param name="s">Input string</param>
+        /// <returns>Escaped (and unqouted) T-SQL string</returns>
         public static string SQLEscape(string s) => (s ?? "").Replace('\'', '"');
 
+        /// <summary>
+        /// Unescapes the given T-SQL compatible string
+        /// </summary>
+        /// <param name="s">Escaped string</param>
+        /// <returns>Unescaped string</returns>
         public static string SQLUnescape(string s) => (s ?? "").Replace('\"', '\'');
     }
 }

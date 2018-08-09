@@ -2,8 +2,8 @@
 using System.Threading.Tasks;
 using System.Threading;
 using System.Security;
-using System;
 using System.Text;
+using System;
 
 
 namespace WWS
@@ -29,9 +29,9 @@ namespace WWS
         }
 
         /// <summary>
-        /// ExecuteAsync's an async Task<T> method which has a void return value synchronously
+        /// ExecuteAsync's an async <see cref="Task"/> method (which has a void return value) synchronously
         /// </summary>
-        /// <param name="task">Task<T> method to execute</param>
+        /// <param name="task"><see cref="Task"/> method to execute</param>
         public static void RunSync(this Func<Task> task)
         {
             SynchronizationContext oldctx = SynchronizationContext.Current;
@@ -62,11 +62,11 @@ namespace WWS
         }
 
         /// <summary>
-        /// ExecuteAsync's an async Task<T> method which has a T return type synchronously
+        /// ExecuteAsync's an async <see cref="Task{T}"/> method (which has the return type T) synchronously
         /// </summary>
         /// <typeparam name="T">Return Type</typeparam>
-        /// <param name="task">Task<T> method to execute</param>
-        /// <returns></returns>
+        /// <param name="task"><see cref="Task{T}"/> method to execute</param>
+        /// <returns>Task return value</returns>
         public static T RunSync<T>(this Func<Task<T>> task)
         {
             SynchronizationContext oldctx = SynchronizationContext.Current;

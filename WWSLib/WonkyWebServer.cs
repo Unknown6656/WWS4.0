@@ -27,13 +27,16 @@ namespace WWS
     /// <summary>
     /// Represents a WonkyWebServer™ for event-based HTTP/HTTPS request processing.
     /// </summary>
-    /// <inheritdoc />
+    /// <inheritdoc cref="WebServer{T}"/>
     public sealed class WonkyWebServer
-        : IWebServer<IWSConfiguration>
+        : WebServer<WonkyWebServer>
+        , IConfigurableWebServer<IWSConfiguration>
     {
+        internal readonly object _ot_mutex = new object();
         internal HTTPRewriteResult _ot_override;
         private IWSConfiguration _config;
         private HTTPServer _server;
+
 
         /// <inheritdoc />
         public IWSConfiguration Configuration
@@ -48,9 +51,11 @@ namespace WWS
             }
             get => _config;
         }
-        /// <inheritdoc />
-        public bool IsRunning { private set; get; }
 
+        /// <inheritdoc />
+        public override bool IsRunning { protected set; get; }
+
+        
         /// <summary>
         /// The event is fired upon each incoming HTTP or HTTPS request.
         /// </summary>
@@ -76,12 +81,14 @@ namespace WWS
         public WonkyWebServer(IWSConfiguration config) => Configuration = config;
 
         /// <inheritdoc />
-        public void Start()
+        public override void Start()
         {
             lock (this)
             {
                 if (IsRunning)
                     throw new InvalidOperationException("The configuration cannot be set while the web server is running. Please stop the server before changing its configuration.");
+
+                __OnStarting(this);
 
                 VerifyConfig();
 
@@ -92,18 +99,24 @@ namespace WWS
                 _server.Start();
 
                 IsRunning = true;
+
+                __OnStarted(this);
             }
         }
 
         /// <inheritdoc />
-        public void Stop()
+        public override void Stop()
         {
             lock (this)
             {
+                __OnStopping(this);
+
                 _server?.Stop();
                 _server = null;
 
                 IsRunning = false;
+
+                __OnStopped(this);
             }
         }
 
@@ -139,7 +152,7 @@ namespace WWS
                 return null;
 
             DateTime utcnow = DateTime.UtcNow;
-            IPEndPoint ipep_server = req?.LocalEndPoint ?? new IPEndPoint(IPAddress.IPv6Any, _config.ListeningPort);
+            IPEndPoint ipep_server = req.LocalEndPoint ?? new IPEndPoint(IPAddress.IPv6Any, _config.ListeningPort);
             IPEndPoint ipep_remote = req.RemoteEndPoint ?? new IPEndPoint(IPAddress.Broadcast, ushort.MaxValue - 1);
             WWSRequestHandler handler;
             IWSConfiguration config;
@@ -162,7 +175,7 @@ namespace WWS
 
             if (config.UseConnectionUpgrade)
             {
-                res.Headers[HttpResponseHeader.Connection] = "Upgrade";
+                res.Headers[HttpResponseHeader.Connection] = "keep-alive; upgrade";
                 res.Headers[HttpResponseHeader.Upgrade] = "h2c";
             }
             else
@@ -208,7 +221,8 @@ namespace WWS
                 Cookies = cookies,
                 Content = content,
                 UTCRequestTime = utcnow,
-                ServerVariables = new ReadOnlyDictionary<string, string>(servervars),
+                RequestedURL = req.Url,
+                ServerVariables = servervars,
                 GETVariables = new ReadOnlyDictionary<string, string>(Util.DecomposeQueryString(req.Url.Query)),
             };
 
@@ -231,9 +245,7 @@ namespace WWS
                             rdat = await On500Error(this, wwsrq, ex);
                             handled = true;
                         }
-                        catch
-                        {
-                        }
+                        catch { /* ignored */ }
 
                     if (!handled)
                         rdat = (HttpStatusCode.InternalServerError, $@"
@@ -256,7 +268,7 @@ namespace WWS
 ", config.TextEncoding);
                 }
 
-            lock (_ot_override)
+            lock (_ot_mutex)
                 if (_ot_override != null)
                 {
                     res.Headers[HttpResponseHeader.Server] = res.Headers[HttpResponseHeader.Server] ?? _ot_override.ServerString;
@@ -287,7 +299,7 @@ namespace WWS
         /// <summary>
         /// The server's variables (read-only)
         /// </summary>
-        public IReadOnlyDictionary<string, string> ServerVariables { internal set; get; }
+        public Dictionary<string, string> ServerVariables { internal set; get; }
         /// <summary>
         /// The client's cookies (read/write)
         /// </summary>
@@ -313,11 +325,15 @@ namespace WWS
         /// </summary>
         public string ContentString => RawRequest.ContentEncoding.GetString(Content);
         /// <summary>
-        /// The requested HTTP/HTTPS URL.
+        /// The originally requested HTTP/HTTPS URL (before rewriting, only differs on a <see cref="DodgyWebServer"/>).
         /// </summary>
-        public Uri RequestedURL => RawRequest.Url;
+        public Uri OriginalURL => RawRequest.Url;
         /// <summary>
-        /// The requested (unescaped) HTTP/HTTPS URL path. In case of the requested URI 'https://example.org/folder/my%20file?param=value' the path would be '/folder/my file'.
+        /// The requested HTTP/HTTPS URL (after rewriting, only differs on a <see cref="DodgyWebServer"/>).
+        /// </summary>
+        public Uri RequestedURL { internal set; get; }
+        /// <summary>
+        /// The requested (unescaped, rewritten) HTTP/HTTPS URL path. In case of the requested URI 'https://example.org/folder/my%20file?param=value' the path would be '/folder/my file'.
         /// </summary>
         public string RequestedURLPath => Uri.UnescapeDataString(RequestedURL.AbsolutePath);
         /// <summary>
@@ -436,7 +452,7 @@ namespace WWS
     /// <summary>
     /// Represents a server configuration for a WonkyWebServer™
     /// </summary>
-    /// <inheritdoc />
+    /// <inheritdoc cref="IWSConfiguration"/>
     public struct WWSConfiguration
         : IWSConfiguration
     {
@@ -508,6 +524,9 @@ namespace WWS
     /// </summary>
     public struct WWSHTTPSConfiguration
     {
+        /// <summary>
+        /// The .X509 certificate policy
+        /// </summary>
         public WWSHTTPSCertificatePolicy CertificatePolicy { set; get; }
         /// <summary>
         /// The .X509 encryption and signature certificate

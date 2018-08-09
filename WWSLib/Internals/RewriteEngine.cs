@@ -141,7 +141,7 @@ begin:
 
                                     bool has_q = res.Contains('?');
 
-                                    if (flags.Contains(HTTPRewriteFlags.QSA))
+                                    if (flags.Contains(HTTPRewriteFlags.QSA) && uri.Query.Length > 0)
                                         res += has_q ? '&' + uri.Query.Substring(1) : uri.Query;
 
                                     if (!Uri.IsWellFormedUriString(res, UriKind.Absolute))
@@ -189,9 +189,7 @@ begin:
                         }
                     }
                     else
-                    {
                         --skip;
-                    }
 
             return new HTTPRewriteResult
             {
@@ -405,6 +403,10 @@ begin:
                                                   select eidx < 0 ? (f.Trim(), "") : (f.Substring(0, eidx).Trim(), f.Substring(eidx + 1).Trim()))
                 switch (name.ToUpper())
                 {
+                    case "BNP":
+                        oflags |= HTTPRewriteFlags.BNP;
+
+                        break;
                     case "C":
                         oflags |= HTTPRewriteFlags.C;
 
@@ -513,7 +515,7 @@ begin:
         /// <summary>
         /// Represents the <code>mod_rewrite</code>'s `BNP`-rule ("Backreference: no plus").
         /// </summary>
-        public static HTTPRewriteFlags BNP => new Chained();
+        public static HTTPRewriteFlags BNP => new DontUsePlus();
         /// <summary>
         /// Represents the <code>mod_rewrite</code>'s `C`-rule ("Chained").
         /// </summary>

@@ -11,7 +11,11 @@ namespace Test
     {
         public static async Task Main(string[] args)
         {
-            DodgyWebServer srv = new DodgyWebServer(DWSConfiguration.DefaultHTTPConfiguration);
+            DWSConfiguration conf = DWSConfiguration.DefaultHTTPConfiguration;
+
+            conf.AllowSQLDebugging = true;
+
+            DodgyWebServer srv = new DodgyWebServer(conf);
 
             Console.WriteLine($"Listening on {srv.Configuration.ListeningPort}. Press ESC to exit.");
 

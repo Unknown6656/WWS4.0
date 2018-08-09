@@ -19,19 +19,57 @@ namespace WWS.Internals
         private static DateTime _lastfetch = DateTime.MinValue;
 
 
-
+        /// <summary>
+        /// The host's country
+        /// </summary>
         public string Country { get; private set; }
+        /// <summary>
+        /// The host's country code
+        /// </summary>
         public string CountryCode { get; private set; }
+        /// <summary>
+        /// The host's region code
+        /// </summary>
         public string RegionCode { get; private set; }
+        /// <summary>
+        /// The host's region
+        /// </summary>
         public string Region { get; private set; }
+        /// <summary>
+        /// The host's city
+        /// </summary>
         public string City { get; private set; }
+        /// <summary>
+        /// The host's zip code
+        /// </summary>
         public int ZipCode { get; private set; }
+        /// <summary>
+        /// The host's geographic latitude
+        /// </summary>
         public double Latitude { get; private set; }
+        /// <summary>
+        /// The host's geographic longitude
+        /// </summary>
         public double Longitude { get; private set; }
+        /// <summary>
+        /// The host's geographic timezone
+        /// </summary>
         public string Timezone { get; private set; }
+        /// <summary>
+        /// The host's ISP name
+        /// </summary>
         public string ISPName { get; private set; }
+        /// <summary>
+        /// The host's organization name
+        /// </summary>
         public string OrganizationName { get; private set; }
+        /// <summary>
+        /// The host's alias name
+        /// </summary>
         public string Alias { get; private set; }
+        /// <summary>
+        /// The host's IP address
+        /// </summary>
         public string IPAddress { get; private set; }
 
 
